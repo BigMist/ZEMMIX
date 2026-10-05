@@ -177,8 +177,15 @@ NextZ80 Z80
  .WAIT(!CE)
 );
 
+// CE every third clock: with clk = memclk (86MHz) the Z80 runs at 28.6MHz
+// (25MHz at the original 50MHz), and the RAM gets the Z80 address two clocks
+// before the CE edge that reads its data (multicycle in the SDC).
+reg [1:0] ce_cnt = 0;
 reg CE = 0;
-always @(posedge clk) CE <= !CE;
+always @(posedge clk) begin
+ ce_cnt <= (ce_cnt == 2'd2) ? 2'd0 : ce_cnt + 2'd1;
+ CE <= (ce_cnt == 2'd2);
+end
 
 endmodule
 
@@ -207,7 +214,9 @@ localparam RATIO = 1 << (ADDRESS_WIDTH1 - ADDRESS_WIDTH2);
 localparam DATA_WIDTH2 = DATA_WIDTH1 * RATIO;
 localparam RAM_DEPTH = 1 << ADDRESS_WIDTH2;
 
-reg [RATIO-1:0] [DATA_WIDTH1-1:0] ram[0:RAM_DEPTH-1];
+// no_rw_check: no bypass logic for a Z80 / sequencer access to the same
+// address in the same clock (it is not on the 86MHz critical path then)
+(* ramstyle = "no_rw_check" *) reg [RATIO-1:0] [DATA_WIDTH1-1:0] ram[0:RAM_DEPTH-1];
 initial $readmemh(INIT_FILE, ram);
 
 // Port A
