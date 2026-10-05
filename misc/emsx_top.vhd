@@ -2132,7 +2132,10 @@ begin
     process( clk21m )
     begin
         if( clk21m'event and clk21m = '1' )then
-            case DisplayMode is
+            -- F18A: the VDP always outputs 15kHz with separate H / V syncs
+            -- and the mist_video scandoubler makes 31kHz, so always take
+            -- the VGA branch (RGB, HS, VS) whatever DisplayMode is.
+            case std_logic_vector'("10") is
             when "00" =>                                            -- TV 15kHz
                 pDac_VR     <= videoC;                              -- Chrominance of S-Video Out
                 pDac_VG     <= videoY;                              -- Luminance of S-Video Out
@@ -2740,7 +2743,7 @@ begin
         port map(clk21m, reset, VdpReq, open, wrt, adr, VdpDbi, dbo, pVdpInt_n,
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
-                        VideoDHClk, VideoDLClk, BLANK_o, Reso_v, ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y);
+                        VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y);  -- F18A: always 15kHz, mist_video doubles
 
     U21 : vencode
         port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,

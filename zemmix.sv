@@ -468,7 +468,9 @@ wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked;
 
 always @(posedge clk_sys) begin
 	if (img_reset_cnt != 0) img_reset_cnt <= img_reset_cnt - 1'd1;
-	if (img_mounted) img_reset_cnt <= 28'h2000000;
+	// No reset on img_mounted: the ARM (SiDi128 firmware) repeats the
+	// notification and the MSX stayed in reset (like MSX_MiST by gyurco).
+	//if (img_mounted) img_reset_cnt <= 28'h2000000;
 	reset <= resetW;
 	dipsw <= {~status[8], ~status[7], ~status[6:5], ~status[4], ~status[3],1'b0 , ~status[1]};
 end
@@ -798,8 +800,8 @@ mist_video
 	.VGA_B        (VGA_B      ),
 	.VGA_VS       (VGA_VS     ),
 	.VGA_HS       (VGA_HS     ),
-	.ce_divider   (1'b0       ),
-	.scandoubler_disable(1'b1),
+	.ce_divider   (3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
+	.scandoubler_disable(scandoubler_disable),   // F18A: 15kHz from the VDP, MiST doubles
 	.no_csync     (1'b1),
 	.scanlines    (2'b00),
 	.ypbpr        (1'b0      )
@@ -826,11 +828,12 @@ i2c_master #(22_000_000) i2c_master (
 
 mist_video #(
 	.COLOR_DEPTH(6),
+	.SD_HCNT_WIDTH(10),
 	.OUT_COLOR_DEPTH(8),
-	.USE_BLANKS(0),
+	.USE_BLANKS(1),                              // F18A: DE from the blank (HBlank)
 	.OSD_COLOR(3'b001),
 	.BIG_OSD(BIG_OSD),
-	.VIDEO_CLEANER(0)
+	.VIDEO_CLEANER(1)
 )
 
 hdmi_video (
@@ -840,9 +843,9 @@ hdmi_video (
 	.SPI_SCK     ( SPI_SCK    ),
 	.SPI_SS3     ( SPI_SS3    ),
 	.SPI_DI      ( SPI_DI     ),
-	.scanlines   (status[9:7]),
-	.ce_divider  ( 3'd0       ),
-	.scandoubler_disable (1'b1),
+	.scanlines   (2'b00),                        // status[9:7] are other options (DIP switches, tape)
+	.ce_divider  ( 3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
+	.scandoubler_disable (1'b0),                 // F18A: HDMI always doubled
 	.no_csync    ( 1'b1       ),
 	.ypbpr       ( 1'b0       ),
 	.rotate      ( 2'b00      ),
@@ -850,26 +853,18 @@ hdmi_video (
 	.R           (R_O),
 	.G           (G_O),
 	.B           (B_O),
-//	.HBlank      ( HBlank      ),
-//	.VBlank      ( VBlank      ),
+	.HBlank      ( blank       ),                // F18A: H+V blank, held high on vblank lines
+	.VBlank      ( ~VSync      ),                // F18A: frame start for the OSD (vertical sync, active high)
 	.HSync       ( HSync       ),
 	.VSync       ( VSync       ),
 	.VGA_R       ( HDMI_R      ),
 	.VGA_G       ( HDMI_G      ),
 	.VGA_B       ( HDMI_B      ),
-	.VGA_VS      (             ),
-	.VGA_HS      (             ),
-	.VGA_DE      (             )
+	.VGA_VS      ( HDMI_VS     ),
+	.VGA_HS      ( HDMI_HS     ),
+	.VGA_DE      ( HDMI_DE     )
 );
 assign HDMI_PCLK = clk_hdmi;
 
-always @(posedge clk_hdmi) begin
-	//HDMI_R <= r;
-	//HDMI_G <= g;
-	//HDMI_B <= b;
-	HDMI_HS <= HSync;
-	HDMI_VS <= VSync;
-	HDMI_DE <= !blank;
-end
 `endif	
 endmodule
