@@ -177,14 +177,16 @@ NextZ80 Z80
  .WAIT(!CE)
 );
 
-// CE every third clock: with clk = memclk (86MHz) the Z80 runs at 28.6MHz
-// (25MHz at the original 50MHz), and the RAM gets the Z80 address two clocks
-// before the CE edge that reads its data (multicycle in the SDC).
+// CE every second clock (Z80 at 25MHz with the 50MHz OPL3 clock), or every
+// third one above 60MHz: with clk = memclk (86MHz) the Z80 runs at 28.6MHz
+// and the RAM gets the Z80 address two clocks before the CE edge that reads
+// its data (multicycle in the SDC).
+localparam [1:0] CE_DIV = (OPLCLK > 60000000) ? 2'd3 : 2'd2;
 reg [1:0] ce_cnt = 0;
 reg CE = 0;
 always @(posedge clk) begin
- ce_cnt <= (ce_cnt == 2'd2) ? 2'd0 : ce_cnt + 2'd1;
- CE <= (ce_cnt == 2'd2);
+ ce_cnt <= (ce_cnt == CE_DIV - 2'd1) ? 2'd0 : ce_cnt + 2'd1;
+ CE <= (ce_cnt == CE_DIV - 2'd1);
 end
 
 endmodule

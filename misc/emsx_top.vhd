@@ -50,12 +50,14 @@ entity emsx_top is
         use_wifi_g      : boolean   := true;
         use_midi_g      : boolean   := true;
         use_opl3_g      : boolean   := true;
-        use_dualpsg_g   : boolean   := true
+        use_dualpsg_g   : boolean   := true;
+        opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz
     );
     port(
         -- Clock, Reset ports
         Clk21m          : in    std_logic;                                      -- VDP Clock ... 21.48MHz
 		  memclk          : in    std_logic;
+		  clk_opl         : in    std_logic;                            -- OPL3 clock (opl3_clk_g Hz)
         pExtClk         : in    std_logic;                                      -- Reserved (for multi FPGAs)
         pCpuClk         : out   std_logic;                                      -- CPU Clock ... 3.58MHz (up to 10.74MHz/21.48MHz)
         reset           : inout std_logic;
@@ -2932,11 +2934,11 @@ begin
     opl3_u : if use_opl3_g generate
         opl3_1 : opl3
         generic map(
-            OPLCLK              => 86000000             -- opl_clk in Hz
+            OPLCLK              => opl3_clk_g           -- opl_clk in Hz
         )
         port map(
             clk                 => clk21m,
-            clk_opl             => memclk,              -- 86MHz
+            clk_opl             => clk_opl,             -- CLOCK_50 or memclk
             rst_n               => (not reset),
             irq_n               => opl3_Int_n,
 

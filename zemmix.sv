@@ -544,16 +544,27 @@ wire cpuClk;
 localparam true = "true";
 localparam false = "false";
 
+// OPL3 clock: 50MHz as the OPL3 was designed for, memclk without CLOCK_50
+`ifdef USE_CLOCK_50
+localparam OPL3_CLK = 50000000;
+wire clk_opl = CLOCK_50;
+`else
+localparam OPL3_CLK = 86000000;
+wire clk_opl = memclk;
+`endif
+
 emsx_top #(
     .use_wifi_g(true),   // activar interfaz UNAPI
     .use_midi_g(true),   // activar interfaz midi
     .use_opl3_g(true),  // false. cambiar a true para activar OPL3
-    .use_dualpsg_g(false)// activar doble chip PSG
+    .use_dualpsg_g(false),// activar doble chip PSG
+    .opl3_clk_g(OPL3_CLK)
 ) emsx (
 
 //      -- Clock, Reset ports
         .clk21m     (clk_sys),
         .memclk     (memclk),
+        .clk_opl    (clk_opl),
         .pSltRst_n  (~reset),
 
 //       -- MSX cartridge
