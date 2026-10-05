@@ -451,7 +451,9 @@ architecture RTL of emsx_top is
             legacy_vga      : in    std_logic;
 
             VDP_ID          : in    std_logic_vector(  4 downto 0 );
-            OFFSET_Y        : in    std_logic_vector(  6 downto 0 )
+            OFFSET_Y        : in    std_logic_vector(  6 downto 0 );
+
+            wait_n          : out   std_logic                           -- V9968: VRAM read in progress
         );
     end component;
 
@@ -1073,6 +1075,7 @@ architecture RTL of emsx_top is
     -- ESP signals
     signal  esp_dout_s      : std_logic_vector(  7 downto 0 ) := (others => '1');
     signal  esp_wait_s      : std_logic := '1';
+    signal  vdp_wait_n_s    : std_logic;
 --  signal  esp_tx_i        : std_logic;
 --  signal  esp_rx_o        : std_logic;
 
@@ -1682,7 +1685,7 @@ begin
                 count := count - 1;
             end if;
 
-            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' )then
+            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' )then
                 wait_n_s <= '0';
             elsif( count /= "0000" )then
                 wait_n_s <= '0';
@@ -1750,7 +1753,7 @@ begin
                 dlydbi <= RomDbi;
             elsif( mem = '1' and iSltErm = '1' and MmcEna = '1' )then                                       -- MegaSD
                 dlydbi <= MmcDbi;
-            elsif( mem = '0' and adr(  7 downto 2 ) = "100110" )then                                        -- VDP (V9938/V9958)
+            elsif( mem = '0' and adr(  7 downto 3 ) = "10011" )then                                         -- VDP (V9968: 98-9Fh)
                 dlydbi <= VdpDbi;
             elsif( mem = '0' and adr(  7 downto 2 ) = "101000" )then                                        -- PSG (AY-3-8910)
                 dlydbi <= PsgDbi;
@@ -2084,7 +2087,7 @@ begin
     RamReq  <=  Scc1Ram or Scc2Ram or ErmRam or MapRam or RomReq or KanRom;
 
     -- access request to component
-    VdpReq      <=  req when( mem = '0' and adr(7 downto 2) = "100110"                                                  )else '0';  -- I/O:98-9Bh / VDP (V9938/V9958)
+    VdpReq      <=  req when( mem = '0' and adr(7 downto 3) = "10011"                                                   )else '0';  -- I/O:98-9Fh / VDP (V9968)
     PsgReq      <=  req when( mem = '0' and adr(7 downto 2) = "101000"                                                  )else '0';  -- I/O:A0-A3h / PSG (AY-3-8910)
     Psg2Req     <=  req when( mem = '0' and adr(7 downto 2) = "000100" and iPsg2_ena = '1' and use_dualpsg_g            )else '0';  -- I/O:10-13h / PSG2 (AY-3-8910)
     PpiReq      <=  req when( mem = '0' and adr(7 downto 2) = "101010"                                                  )else '0';  -- I/O:A8-ABh / PPI (8255)
@@ -2103,7 +2106,7 @@ begin
     portF4_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110100"                                                )else '0';  -- I/O:F4h    / Port F4 device
     tr_pcm_req  <=  req when( mem = '0' and adr(7 downto 1) = "1010010"                                                 )else '0';  -- I/O:A4-A5h / turboR PCM device
 
-    BusDir  <=  '1' when( pSltAdr(7 downto 2) = "100110"                                        )else   -- I/O:98-9Bh / VDP (V9938/V9958)
+    BusDir  <=  '1' when( pSltAdr(7 downto 3) = "10011"                                         )else   -- I/O:98-9Fh / VDP (V9968)
                 '1' when( pSltAdr(7 downto 2) = "101000"                                        )else   -- I/O:A0-A3h / PSG (AY-3-8910)
                 '1' when( pSltAdr(7 downto 2) = "000100" and iPsg2_ena = '1' and use_dualpsg_g  )else   -- I/O:10-13h / PSG2 (AY-3-8910)
                 '1' when( pSltAdr(7 downto 2) = "101010"                                        )else   -- I/O:A8-ABh / PPI (8255)
@@ -2743,7 +2746,8 @@ begin
         port map(clk21m, reset, VdpReq, open, wrt, adr, VdpDbi, dbo, pVdpInt_n,
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
-                        VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y);  -- F18A: always 15kHz, mist_video doubles
+                        VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
+                        vdp_wait_n_s);
 
     U21 : vencode
         port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,
