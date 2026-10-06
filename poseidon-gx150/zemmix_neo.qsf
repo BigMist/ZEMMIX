@@ -530,7 +530,7 @@ set_global_assignment -name VERILOG_FILE "../ocm-pld-dev/ocm_sm/src_addons/perip
 set_global_assignment -name VERILOG_FILE "../ocm-pld-dev/ocm_sm/src_addons/peripheral/autofire.v"
 set_global_assignment -name VERILOG_FILE ../misc/iplrom_512k.v
 set_global_assignment -name QIP_FILE ../misc/emsx.qip
-set_global_assignment -name QIP_FILE ../f18a/f18a.qip
+set_global_assignment -name QIP_FILE ../v9968/v9968.qip
 set_global_assignment -name SDC_FILE msx_mist.sdc
 set_global_assignment -name QIP_FILE ../zemmix.qip
 set_global_assignment -name VERILOG_FILE ../misc/StereoVolumeControl.v
