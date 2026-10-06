@@ -2718,7 +2718,7 @@ begin
     U01 : t80a
         port map(
             RESET_n     => (not reset),
-            R800_mode   => portF4_mode,         -- '0' => no MULU, '1' => MULU with LEs, portF4_mode = auto selection with LEs
+            R800_mode   => s1990_r800,          -- '0' => Z80 (no MULU), '1' => R800 selected by S1990 R#6 (MSXtR only)
             CLK_n       => iCpuClk,
             WAIT_n      => wait_n_s,
             INT_n       => pSltInt_n,

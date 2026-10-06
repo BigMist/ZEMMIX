@@ -1,6 +1,7 @@
 [submodule "T80"]
 	path = T80
-	url = https://github.com/mist-devel/T80.git
+	url = https://github.com/rampa069/T80.git
+	branch = r800
 [submodule "mist-modules"]
 	path = mist-modules
 	url = https://github.com/mist-devel/mist-modules.git
