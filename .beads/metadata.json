@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "ZEMMIX",
+  "project_id": "ee7593ab-6f41-4705-9119-d0c44d4ad48a"
+}

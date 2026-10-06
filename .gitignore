@@ -10,3 +10,10 @@ PLLJ_PLLSPE_INFO.txt
 *.qws
 *.cmp
 tmp/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
