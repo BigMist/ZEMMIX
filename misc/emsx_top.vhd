@@ -282,7 +282,6 @@ architecture RTL of emsx_top is
         port(
             clk21m      : in    std_logic;
             reset       : in    std_logic;
-            clkena      : in    std_logic;
             req         : in    std_logic;
             ack         : out   std_logic;
             mem         : in    std_logic;
@@ -389,7 +388,6 @@ architecture RTL of emsx_top is
         port(
             clk21m          : in    std_logic;
             reset           : in    std_logic;
-            clkena          : in    std_logic;
             req             : in    std_logic;
             ack             : out   std_logic;
             wrt             : in    std_logic;
@@ -560,6 +558,9 @@ architecture RTL of emsx_top is
 
     --  switched I/O ports
     component switched_io_ports
+        generic(
+            use_wifi_g      : boolean
+        );
         port(
             clk21m          : in    std_logic;
             reset           : in    std_logic;
@@ -570,45 +571,82 @@ architecture RTL of emsx_top is
             adr             : in    std_logic_vector( 15 downto 0 );
             dbi             : out   std_logic_vector(  7 downto 0 );
             dbo             : in    std_logic_vector(  7 downto 0 );
-            -- 'REGS' group
-            io40_n          : inout std_logic_vector(  7 downto 0 );            -- ID Manufacturers/Devices :   $08 (008), $D4 (212=1chipMSX), $FF (255=null)
+
+            io40_n          : inout std_logic_vector(  7 downto 0 );            -- ID Manufacturers/Devices :   $08 (008), $D4 (212=OCM ID, now MSX++ ID), $FF (255=null)
             io41_id212_n    : inout std_logic_vector(  7 downto 0 );            -- $41 ID212 states         :   Smart Commands
             io42_id212      : inout std_logic_vector(  7 downto 0 );            -- $42 ID212 states         :   Virtual DIP-SW states
-            io43_id212      : inout std_logic_vector(  7 downto 0 );            -- $43 ID212 states         :   Lock Mask for port $42 functions, OPL3 and reset key
-            io44_id212      : inout std_logic_vector(  7 downto 0 );            -- $44 ID212 states         :   Lights Mask have the green leds control when Lights Mode is On
-            OpllVol         : inout std_logic_vector(  2 downto 0 );            -- OPLL Volume
-            SccVol          : inout std_logic_vector(  2 downto 0 );            -- SCC-I Volume
+            io43_id212      : inout std_logic_vector(  7 downto 0 );            -- $43 ID212 states         :   Lock Mask for port $42 functions, CMT and System Reset
+            io44_id212      : inout std_logic_vector(  7 downto 0 );            -- $44 ID212 states         :   Lights Mask has the green leds control when Lights Mode is On
+
             PsgVol          : inout std_logic_vector(  2 downto 0 );            -- PSG Volume
             MstrVol         : inout std_logic_vector(  2 downto 0 );            -- Master Volume
+            OpllVol         : inout std_logic_vector(  2 downto 0 );            -- OPLL Volume
+            SccVol          : inout std_logic_vector(  2 downto 0 );            -- SCC-I Volume
+
             CustomSpeed     : inout std_logic_vector(  3 downto 0 );            -- Counter limiter of CPU wait control
             tMegaSD         : inout std_logic;                                  -- Turbo on MegaSD access   :   3.58MHz to 5.37MHz auto selection
             tPanaRedir      : inout std_logic;                                  -- tPana Redirection switch
             VdpSpeedMode    : inout std_logic;                                  -- VDP Speed Mode           :   0=Normal, 1=Fast
-            V9938_n         : inout std_logic;                                  -- VDP core installed       :   0=V9938, 1=TH9958
+            V9938_n         : in    std_logic;                                  -- VDP core installed       :   0=V9938, 1=TH9958
             Mapper_req      : inout std_logic;                                  -- Mapper req               :   Warm Reset is required to complete the request
             Mapper_ack      : out   std_logic;                                  -- Current Mapper state
             MegaSD_req      : inout std_logic;                                  -- MegaSD req               :   Warm Reset is required to complete the request
             MegaSD_ack      : out   std_logic;                                  -- Current MegaSD state
+
             io41_id008_n    : inout std_logic;                                  -- $41 ID008 BIT-0 state    :   0=5.37MHz, 1=3.58MHz (write_n only)
             swioKmap        : inout std_logic;                                  -- Keyboard layout selector
-            CmtScro         : inout std_logic;                                  -- Internal OPL3 state
-            swioCmt         : inout std_logic;                                  -- Internal OPL3 enabler    :   No toggle is required to use CMT in this firmware
+            CmtScro         : inout std_logic;                                  -- CMT state
+            swioCmt         : inout std_logic;                                  -- CMT enabler              :   This toggle is used for the Internal OPL3 on SM-X, SX-2 and SX-E
             LightsMode      : inout std_logic;                                  -- Custom green led states
             Red_sta         : inout std_logic;                                  -- Custom red led state
-            LastRst_sta     : inout std_logic;                                  -- Last reset state         :   0=Cold Reset, 1=Warm Reset (MSX2+) / 1=Cold Reset, 0=Warm Reset (MSXtR)
+            LastRst_sta     : inout std_logic;                                  -- Last reset state         :   0=F4 Cold Reset, 1=F4 Warm Reset (MSX2+) / 1=F4 Cold Reset, 0=F4 Warm Reset (MSXtR)
             RstReq_sta      : inout std_logic;                                  -- Reset request state      :   0=No, 1=Yes
             Blink_ena       : inout std_logic;                                  -- MegaSD blink led enabler
+
             pseudoStereo    : inout std_logic;                                  -- RCA-LEFT(red)=External Audio Card / RCA-RIGHT(white)=Internal Sounds
             extclk3m        : inout std_logic;                                  -- External Clock 3.58MHz   :   0=No, 1=Yes
             ntsc_pal_type   : inout std_logic;                                  -- NTSC/PAL Type            :   0=Forced, 1=Auto
             forced_v_mode   : inout std_logic;                                  -- Forced Video Mode        :   0=60Hz, 1=50Hz
-            right_inverse   : inout std_logic;                                  -- Right Inverse Audio      :   0=Off (Normal Wave), 1=On (Inverse Wave)
-            vram_slot_ids   : inout std_logic_vector(  7 downto 0 );            -- VRAM Slot IDs            :   MSB(4bits)=0-15 for Page 1, LSB(4bits)=0-15 for Page 0
-            DefKmap         : inout std_logic;                                  -- Default keyboard layout  :   0=JP, 1=Non-JP (BR, ES, FR, US, ...)
-            -- 'DIP-SW' group
+
+            right_inverse   : inout std_logic;                                  -- Right Inverse Audio      :   0=Off (normal wave), 1=On (inverse wave)
+            RatioMode       : inout std_logic_vector(  2 downto 0 );            -- Pixel Ratio 1:1 for LED Display (default is 0) (range 0-7) (60Hz only)
+            centerYJK_R25_n : inout std_logic;                                  -- Centering YJK Modes/R25 Mask (0=centered, 1=shifted to the right)
+            legacy_sel      : inout std_logic;                                  -- Legacy Output selector   :   0=Assigned to VGA, 1=Assigned to VGA+
+            iSlt1_linear    : inout std_logic;                                  -- Internal Slot1 Linear    :   0=Disabled, 1=Enabled
+            iSlt2_linear    : inout std_logic;                                  -- Internal Slot2 Linear    :   0=Disabled, 1=Enabled
+
+            btn_scan        : in    std_logic;                                  -- Scanlines button
+            vga_scanlines   : inout std_logic_vector(  1 downto 0 );            -- VGA Scanlines None, Light, Medium or Heavy (default is None)
+            iPsg2_ena       : inout std_logic;                                  -- Internal PSG2 enabler
+            SdrSize         : in    std_logic_vector(  1 downto 0 );            -- SDRAM size ID 0-3
+            bios_reload_ack : out   std_logic;                                  -- OCM-BIOS Reloading ack
+            Mapper0_req     : inout std_logic;                                  -- Extra-Mapper req         :   Warm Reset is required to complete the request
+            Slot0_req       : inout std_logic;                                  -- Slot0 Primary Mode req   :   Warm Reset is required to complete the request
+
+            xmr_ena         : inout std_logic;                                  -- Extended MegaROM Reading :   0=Off (default for compatibility), 1=On
+            SdrSizeAux      : in    std_logic_vector(  2 downto 0 );            -- Auxiliary SDRAM size ID 0-7
+            OFFSET_Y        : inout std_logic_vector(  6 downto 0 );            -- Vertical Offset ID 16-24
+
+            spMaxSpr        : inout std_logic;                                  -- Sprite Limit             :   0=4/8 (standard), 1=8/8 (enhanced)
+            vga_int_field   : inout std_logic;                                  -- VGA Interlace Field      :   0=Single (default), 1=Duplicate
+            low_scale_n     : in    std_logic;                                  -- VGA Scanlines variant    :   0=Low-Scale (0%|12%|25%|50%), 1=High-Scale (0%|25%|50%|75%)
+            cbios_mode      : inout std_logic;                                  -- C-BIOS Mode              :   0=Off (default), 1=On
+            Mapper0_ack     : inout std_logic;                                  -- Current Extra-Mapper state
+            Slot0Mode       : inout std_logic;                                  -- Current Slot0 state      :   0=Primary, 1=Expanded
+            safe_mode       : inout std_logic;                                  -- Safe Mode                :   0=Off (default), 1=On [Reserved for IPL-ROM]
+            portF2_ena      : inout std_logic;                                  -- F2 Device enabler
+
             ff_dip_req      : in    std_logic_vector(  7 downto 0 );            -- DIP-SW states/reqs
             ff_dip_ack      : inout std_logic_vector(  7 downto 0 );            -- DIP-SW acks
-            -- 'KEYS' group
+
+            vram_slot_ids   : inout std_logic_vector(  7 downto 0 );            -- VRAM Slot IDs            :   MSB(4bits)=0-15 for Page 1, LSB(4bits)=0-15 for Page 0
+            DefKmap         : inout std_logic;                                  -- Default keyboard layout  :   0=JP, 1=Non-JP (BR, ES, FR, IT, US, ...)
+
+            ff_ldbios_n     : in    std_logic;                                  -- OCM-BIOS loading status
+            VDP_ID          : out   std_logic_vector(  4 downto 0 );            -- VDP ID 0 (V9938) or VDP ID 2 (V9958)
+            JIS2_ena        : inout std_logic;                                  -- JIS2 enabler             :   0=JIS1 only (BIOS 384 KB), 1=JIS1+JIS2 (BIOS 512 KB)
+            portF4_mode     : inout std_logic;                                  -- F4 Device Mode           :   0=Inverted (MSX2+), 1=Normal (MSXtR)
+
             Scro            : in    std_logic;
             ff_Scro         : in    std_logic;
             Reso            : in    std_logic;
@@ -617,36 +655,12 @@ architecture RTL of emsx_top is
             vFKeys          : in    std_logic_vector(  7 downto 0 );
             LevCtrl         : inout std_logic_vector(  2 downto 0 );            -- Volume and high-speed level
             GreenLvEna      : out   std_logic;
-            -- 'RESET' group
-            cold_reset_comb : in    std_logic;                                  -- Cold Reset combination
-            warm_reset_comb : in    std_logic;                                  -- Warm Reset combination
+
             swioRESET_n     : inout std_logic;                                  -- Reset Pulse
             warmRESET       : inout std_logic;                                  -- 0=Cold Reset, 1=Warm Reset
             WarmMSXlogo     : inout std_logic;                                  -- Show MSX logo with Warm Reset
-            -- 'IPL-ROM' group
-            JIS2_ena        : inout std_logic;                                  -- JIS2 enabler             :   0=JIS1 only (BIOS 384 kB), 1=JIS1+JIS2 (BIOS 512 kB)
-            portF4_mode     : inout std_logic;                                  -- Port F4 mode             :   0=F4 Device Inverted (MSX2+), 1=F4 Device Normal (MSXtR)
-            ff_ldbios_n     : in    std_logic;                                  -- OCM-BIOS loading status
-            bios_reload_ack : out   std_logic;                                  -- OCM-BIOS Reloading ack
-            -- 'SPECIAL' group
-            RatioMode       : inout std_logic_vector(  2 downto 0 );            -- Pixel Ratio 1:1 for LED Display (default is 0) (range 0-7) (60Hz only)
-            centerYJK_R25_n : inout std_logic;                                  -- Centering YJK Modes/R25 Mask (0=centered, 1=shifted to the right)
-            legacy_sel      : inout std_logic;                                  -- Legacy Output selector   :   0=Assigned to VGA, 1=Assigned to VGA+
-            iSlt1_linear    : inout std_logic;                                  -- Internal Slot1 Linear    :   0=Disabled, 1=Enabled
-            iSlt2_linear    : inout std_logic;                                  -- Internal Slot2 Linear    :   0=Disabled, 1=Enabled
-            Slot0_req       : inout std_logic;                                  -- Slot0 Primary Mode req   :   Warm Reset is required to complete the request
-            Slot0Mode       : inout std_logic;                                  -- Current Slot0 state      :   0=Primary, 1=Expanded
-            vga_scanlines   : inout std_logic_vector(  1 downto 0 );            -- VGA Scanlines 0%, 25%, 50% or 75% (default is 0%)
-            btn_scan        : in    std_logic;                                  -- Scanlines button
-            Mapper0_req     : inout std_logic;                                  -- Extra-Mapper req         :   Warm Reset is required to complete the request
-            Mapper0_ack     : out   std_logic;                                  -- Current Extra-Mapper state
-            iPsg2_ena       : inout std_logic;                                  -- Internal PSG2 enabler
-            cbios_mode      : out   std_logic;                                  -- C-BIOS Mode              :  0=Off (default), 1=On
-            xmr_ena         : inout std_logic;                                  -- Extended MegaROM Reading :  0=Off (default for compatibility), 1=On
-            -- 'VARIABLES' group
-            SdrSize         : in    std_logic_vector(  1 downto 0 );
-            VDP_ID          : out   std_logic_vector(  4 downto 0 );
-            OFFSET_Y        : out   std_logic_vector(  6 downto 0 )
+            full_reset_comb : in    std_logic;                                  -- Full Reset combination
+            cold_reset_comb : in    std_logic                                   -- Cold Reset combination
         );
     end component;
 
@@ -741,7 +755,13 @@ architecture RTL of emsx_top is
     signal  LevCtrl         : std_logic_vector(  2 downto 0 );
     signal  GreenLvEna      : std_logic;
     signal  cold_reset_comb : std_logic;
-    signal  warm_reset_comb : std_logic;
+    signal  full_reset_comb : std_logic;
+    signal  safe_mode       : std_logic := '0';
+    signal  portF2_ena      : std_logic := '1';
+    signal  low_scale_n     : std_logic := '1';                                 -- no VGA scanline variant here (mist_video)
+    signal  spMaxSpr        : std_logic;
+    signal  vga_int_field   : std_logic;
+    constant SdrSizeAux     : std_logic_vector(  2 downto 0 ) := "111";             -- n/a (default)
     signal  swioRESET_n     : std_logic := '1';
     signal  warmRESET       : std_logic := '0';
     signal  WarmMSXlogo     : std_logic;                                            -- here to reduce LEs
@@ -1781,7 +1801,7 @@ begin
                 dlydbi <= swio_dbi;
             elsif( mem = '0' and adr(  7 downto 0 ) = "10100111" and portF4_mode = '1' )then                -- Pause R800 (read only)
                 dlydbi <= (others => '0');
-            elsif( mem = '0' and adr(  7 downto 0 ) = "11110010" and use_wifi_g )then                       -- Port F2 (ESP8266 BIOS)
+            elsif( mem = '0' and adr(  7 downto 0 ) = "11110010" and portF2_ena = '1' and use_wifi_g )then                       -- Port F2 (ESP8266 BIOS)
                 dlydbi <= portF2;
             elsif( mem = '0' and adr(  7 downto 0 ) = "11110100" and portF4_mode = '1' )then                -- Port F4 normal (Z80 mode)
                 dlydbi <= portF4_bit7 & "0000000";
@@ -2104,7 +2124,7 @@ begin
     RtcReq      <=  req when( mem = '0' and adr(7 downto 1) = "1011010"                                                 )else '0';  -- I/O:B4-B5h / RTC (RP-5C01)
     systim_req  <=  req when( mem = '0' and adr(7 downto 1) = "1110011"                                                 )else '0';  -- I/O:E6-E7h / System timer (S1990)
     swio_req    <=  req when( mem = '0' and adr(7 downto 4) = "0100"                                                    )else '0';  -- I/O:40-4Fh / Switched I/O ports
-    portF2_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110010" and use_wifi_g                                 )else '0';  -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
+    portF2_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                             )else '0';  -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
     portF4_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110100"                                                )else '0';  -- I/O:F4h    / Port F4 device
     tr_pcm_req  <=  req when( mem = '0' and adr(7 downto 1) = "1010010"                                                 )else '0';  -- I/O:A4-A5h / turboR PCM device
 
@@ -2119,7 +2139,7 @@ begin
                 '1' when( pSltAdr(7 downto 1) = "1110011"                                       )else   -- I/O:E6-E7h / System timer (S1990)
                 '1' when( pSltAdr(7 downto 4) = "0100" and io40_n /= "11111111"                 )else   -- I/O:40-4Fh / Switched I/O ports
                 '1' when( pSltAdr(7 downto 0) = "10100111" and portF4_mode = '1'                )else   -- I/O:A7h    / Pause R800 (read only)
-                '1' when( pSltAdr(7 downto 0) = "11110010" and use_wifi_g                       )else   -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
+                '1' when( pSltAdr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                   )else   -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
                 '1' when( pSltAdr(7 downto 0) = "11110100"                                      )else   -- I/O:F4h    / Port F4 device
                 '1' when( pSltAdr(7 downto 1) = "1010010"                                       )else   -- I/O:A4-A5h / turboR PCM device
                 '1' when( pSltAdr(7 downto 1) = "0000011" and use_wifi_g                        )else   -- I/O:06-07h / ESP
@@ -2681,7 +2701,7 @@ begin
 --        port map(_CK, EPC_CS, EPC_DI, EPC_OE, EPC_DO);
 
     U05 : mapper
-        port map(clk21m, reset, clkena, MapReq, open, mem, wrt, adr, MapDbi, dbo,
+        port map(clk21m, reset, MapReq, open, mem, wrt, adr, MapDbi, dbo,
                         MapRam, MapWrt, MapAdr, RamDbi, open);
 
     U06_1 : eseps2
@@ -2735,7 +2755,7 @@ begin
         port map(clk21m, '0', rtcena, RtcReq, open, wrt, adr, RtcDbi, dbo);
 
     U08 : kanji
-        port map(clk21m, reset, clkena, KanReq, open, wrt, adr, KanDbi, dbo,
+        port map(clk21m, reset, KanReq, open, wrt, adr, KanDbi, dbo,
                         KanRom, KanAdr, RamDbi, open);
 
     U20 : vdp
@@ -2799,6 +2819,9 @@ begin
         );
 
     U35 : switched_io_ports
+        generic map(
+            use_wifi_g      => use_wifi_g
+        )
         port map(
             clk21m          => clk21m           ,
             reset           => reset            ,
@@ -2811,23 +2834,26 @@ begin
             dbo             => dbo              ,
 
             io40_n          => io40_n           ,
-            io41_id212_n    => io41_id212_n     ,   -- here to reduce LEs
+            io41_id212_n    => io41_id212_n     ,
             io42_id212      => io42_id212       ,
             io43_id212      => io43_id212       ,
             io44_id212      => io44_id212       ,
-            OpllVol         => OpllVol          ,
-            SccVol          => SccVol           ,
+
             PsgVol          => PsgVol           ,
             MstrVol         => MstrVol          ,
+            OpllVol         => OpllVol          ,
+            SccVol          => SccVol           ,
+
             CustomSpeed     => CustomSpeed      ,
             tMegaSD         => tMegaSD          ,
-            tPanaRedir      => tPanaRedir       ,   -- here to reduce LEs
+            tPanaRedir      => tPanaRedir       ,
             VdpSpeedMode    => VdpSpeedMode     ,
             V9938_n         => V9938_n          ,
-            Mapper_req      => Mapper_req       ,   -- here to reduce LEs
+            Mapper_req      => Mapper_req       ,
             Mapper_ack      => Mapper_ack       ,
-            MegaSD_req      => MegaSD_req       ,   -- here to reduce LEs
+            MegaSD_req      => MegaSD_req       ,
             MegaSD_ack      => MegaSD_ack       ,
+
             io41_id008_n    => io41_id008_n     ,
             swioKmap        => swioKmap         ,
             CmtScro         => CmtScro          ,
@@ -2835,18 +2861,52 @@ begin
             LightsMode      => LightsMode       ,
             Red_sta         => Red_sta          ,
             LastRst_sta     => LastRst_sta      ,
-            RstReq_sta      => RstReq_sta       ,   -- here to reduce LEs
+            RstReq_sta      => RstReq_sta       ,
             Blink_ena       => Blink_ena        ,
+
             pseudoStereo    => pseudoStereo     ,
             extclk3m        => extclk3m         ,
             ntsc_pal_type   => ntsc_pal_type    ,
             forced_v_mode   => forced_v_mode    ,
+
             right_inverse   => right_inverse    ,
-            vram_slot_ids   => vram_slot_ids    ,
-            DefKmap         => DefKmap          ,   -- here to reduce LEs
+            RatioMode       => RatioMode        ,
+            centerYJK_R25_n => centerYJK_R25_n  ,
+            legacy_sel      => legacy_sel       ,
+            iSlt1_linear    => iSlt1_linear     ,
+            iSlt2_linear    => iSlt2_linear     ,
+
+            btn_scan        => '1'              ,
+            vga_scanlines   => vga_scanlines    ,
+            iPsg2_ena       => iPsg2_ena        ,
+            SdrSize         => SdrSize          ,
+            bios_reload_ack => bios_reload_ack  ,
+            Mapper0_req     => Mapper0_req      ,
+            Slot0_req       => Slot0_req        ,
+
+            xmr_ena         => xmr_ena          ,
+            SdrSizeAux      => SdrSizeAux       ,
+            OFFSET_Y        => OFFSET_Y         ,
+
+            spMaxSpr        => spMaxSpr         ,
+            vga_int_field   => vga_int_field    ,
+            low_scale_n     => low_scale_n      ,
+            cbios_mode      => cbios_mode       ,
+            Mapper0_ack     => Mapper0_ack      ,
+            Slot0Mode       => Slot0Mode        ,
+            safe_mode       => safe_mode        ,
+            portF2_ena      => portF2_ena       ,
 
             ff_dip_req      => ff_dip_req       ,
-            ff_dip_ack      => ff_dip_ack       ,   -- here to reduce LEs
+            ff_dip_ack      => ff_dip_ack       ,
+
+            vram_slot_ids   => vram_slot_ids    ,
+            DefKmap         => DefKmap          ,
+
+            ff_ldbios_n     => ff_ldbios_n      ,
+            VDP_ID          => VDP_ID           ,
+            JIS2_ena        => JIS2_ena         ,
+            portF4_mode     => portF4_mode      ,
 
             Scro            => Scro             ,
             ff_Scro         => ff_Scro          ,
@@ -2857,35 +2917,11 @@ begin
             LevCtrl         => LevCtrl          ,
             GreenLvEna      => GreenLvEna       ,
 
-            cold_reset_comb => cold_reset_comb  ,
-            warm_reset_comb => warm_reset_comb  ,
             swioRESET_n     => swioRESET_n      ,
             warmRESET       => warmRESET        ,
-            WarmMSXlogo     => WarmMSXlogo      ,   -- here to reduce LEs
-
-            JIS2_ena        => JIS2_ena         ,
-            portF4_mode     => portF4_mode      ,
-            ff_ldbios_n     => ff_ldbios_n      ,
-            bios_reload_ack => bios_reload_ack  ,
-
-            RatioMode       => RatioMode        ,
-            centerYJK_R25_n => centerYJK_R25_n  ,
-            legacy_sel      => legacy_sel       ,
-            iSlt1_linear    => iSlt1_linear     ,
-            iSlt2_linear    => iSlt2_linear     ,
-            Slot0_req       => Slot0_req        ,   -- here to reduce LEs
-            Slot0Mode       => Slot0Mode        ,
-            vga_scanlines   => vga_scanlines    ,
-            btn_scan        => btn_scan         ,
-            Mapper0_req     => Mapper0_req      ,   -- here to reduce LEs
-            Mapper0_ack     => Mapper0_ack      ,
-            iPsg2_ena       => iPsg2_ena        ,
-            cbios_mode      => cbios_mode       ,
-            xmr_ena         => xmr_ena          ,
-
-            SdrSize         => SdrSize          ,
-            VDP_ID          => VDP_ID           ,
-            OFFSET_Y        => OFFSET_Y
+            WarmMSXlogo     => WarmMSXlogo      ,
+            full_reset_comb => full_reset_comb  ,
+            cold_reset_comb => cold_reset_comb
         );
 
     U40 : tr_pcm
@@ -2988,7 +3024,7 @@ begin
                     w_PpiPortB( 7 downto 1 ) & (w_PpiPortB(0) or af_mask);
 
     -- Cold Reset and Warm Reset combinations
-    cold_reset_comb  <=      vFkeys(7)  and vFkeys(6) and (vFkeys(0) xor Fkeys(0)); -- [LCTRL+SHIFT+F12]
-    warm_reset_comb  <= (not vFkeys(7)) and vFkeys(6) and (vFkeys(0) xor Fkeys(0)); -- [LCTRL+F12]
+    full_reset_comb  <=      vFkeys(7)  and vFkeys(6) and (vFkeys(0) xor Fkeys(0));     -- [LCTRL+SHIFT+F12]
+    cold_reset_comb  <= (not vFkeys(7)) and vFkeys(6) and (vFkeys(0) xor Fkeys(0));     -- [LCTRL+F12]
 
 end RTL;
