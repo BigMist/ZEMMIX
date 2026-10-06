@@ -756,6 +756,7 @@ architecture RTL of emsx_top is
     signal  GreenLvEna      : std_logic;
     signal  cold_reset_comb : std_logic;
     signal  full_reset_comb : std_logic;
+    signal  comb_reset_n    : std_logic := '1';                                 -- reset by key combination (LCTRL+F12, LCTRL+SHIFT+F12)
     signal  safe_mode       : std_logic := '0';
     signal  portF2_ena      : std_logic := '1';
     signal  low_scale_n     : std_logic := '1';                                 -- no VGA scanline variant here (mist_video)
@@ -1445,7 +1446,7 @@ begin
         if( memclk'event and memclk = '1' )then
             if( RstSeq = "11111" )then
                 -- RstSeq has finished
-                reset <= not (iSltRst_n and swioRESET_n);                               -- global reset
+                reset <= not (iSltRst_n and swioRESET_n and comb_reset_n);              -- global reset
             else
                 -- RstSeq is in progress
                 reset <= '1';                                                           -- SDRAM integrity protection
@@ -2920,8 +2921,8 @@ begin
             swioRESET_n     => swioRESET_n      ,
             warmRESET       => warmRESET        ,
             WarmMSXlogo     => WarmMSXlogo      ,
-            full_reset_comb => full_reset_comb  ,
-            cold_reset_comb => cold_reset_comb
+            full_reset_comb => '0'              ,   -- reset combinations handled below (comb_reset_n)
+            cold_reset_comb => '0' 
         );
 
     U40 : tr_pcm
@@ -3026,5 +3027,20 @@ begin
     -- Cold Reset and Warm Reset combinations
     full_reset_comb  <=      vFkeys(7)  and vFkeys(6) and (vFkeys(0) xor Fkeys(0));     -- [LCTRL+SHIFT+F12]
     cold_reset_comb  <= (not vFkeys(7)) and vFkeys(6) and (vFkeys(0) xor Fkeys(0));     -- [LCTRL+F12]
+
+    -- Reset combinations: a cold reset as before ocm-pld-dev v3.9.2, whatever
+    -- the reset key lock of port $43 (bit 5, not initialized by the new
+    -- switched_io_ports) and without OCM-BIOS reloading (the BIOS comes from
+    -- the MiST / SiDi firmware here).
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            if( reset = '1' )then
+                comb_reset_n <= '1';                                                    -- end of the reset pulse
+            elsif( full_reset_comb = '1' or cold_reset_comb = '1' )then
+                comb_reset_n <= '0';
+            end if;
+        end if;
+    end process;
 
 end RTL;

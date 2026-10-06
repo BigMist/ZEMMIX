@@ -468,9 +468,7 @@ wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked;
 
 always @(posedge clk_sys) begin
 	if (img_reset_cnt != 0) img_reset_cnt <= img_reset_cnt - 1'd1;
-	// No reset on img_mounted: the ARM (SiDi128 firmware) repeats the
-	// notification and the MSX stayed in reset (like MSX_MiST by gyurco).
-	//if (img_mounted) img_reset_cnt <= 28'h2000000;
+	if (img_mounted | status[0]) img_reset_cnt <= 28'h2000000;
 	reset <= resetW;
 	dipsw <= {~status[8], ~status[7], ~status[6:5], ~status[4], ~status[3],1'b0 , ~status[1]};
 end
