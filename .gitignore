@@ -9,3 +9,4 @@ PLLJ_PLLSPE_INFO.txt
 *.ppf
 *.qws
 *.cmp
+tmp/

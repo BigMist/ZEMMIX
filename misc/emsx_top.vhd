@@ -1089,6 +1089,13 @@ architecture RTL of emsx_top is
     signal  portF4_req      : std_logic;
     signal  portF4_bit7     : std_logic;                                            -- 1=hard reset, 0=soft reset
 
+    -- S1990 registers (I/O $E4-$E5)
+    signal  s1990_req       : std_logic;
+    signal  s1990_sel       : std_logic_vector(  7 downto 0 );                      -- E4h: register select
+    signal  s1990_cpu       : std_logic_vector(  6 downto 5 );                      -- R#6: bit6 1=ROM 0=DRAM, bit5 1=Z80 0=R800
+    signal  s1990_dbi       : std_logic_vector(  7 downto 0 );
+    signal  s1990_r800      : std_logic;                                            -- '1' => R800 selected (MSXtR only)
+
     -- turboR PCM device
     signal  tr_pcm_req      : std_logic;
     signal  tr_pcm_dbi      : std_logic_vector(  7 downto 0 );
@@ -1288,7 +1295,10 @@ begin
                     ff_clksel5m_n   <=  '1';
                     ff_clksel       <=  '1';
                 elsif( logo_timeout = "10" )then
-                    if( io42_id212(0) = '0' )then
+                    if( s1990_r800 = '1' )then                                          -- R800 selected (MSXtR) => 10.74MHz
+                        ff_clksel5m_n   <=  '1';
+                        ff_clksel       <=  '1';
+                    elsif( io42_id212(0) = '0' )then
                         ff_clksel5m_n   <=  io41_id008_n    and hybridclk_n;
                         ff_clksel       <=  io42_id212(0)   and hybridclk_n;
                     else
@@ -1796,6 +1806,8 @@ begin
                 dlydbi <= RtcDbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "1110011" )then                                       -- System timer (S1990)
                 dlydbi <= systim_dbi;
+            elsif( mem = '0' and adr(  7 downto 1 ) = "1110010" and portF4_mode = '1' )then                 -- S1990 registers
+                dlydbi <= s1990_dbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "1010010" )then                                       -- turboR PCM device
                 dlydbi <= tr_pcm_dbi;
             elsif( mem = '0' and adr(  7 downto 4 ) = "0100" and io40_n /= "11111111" )then                 -- Switched I/O ports
@@ -1930,6 +1942,43 @@ begin
             end if;
         end if;
     end process;
+
+    ----------------------------------------------------------------
+    -- S1990 registers (MSXtR only)
+    ----------------------------------------------------------------
+    -- E4h : register select (read back as written)
+    -- E5h : register data
+    --       R#5  = firmware switch (bit6, always off)
+    --       R#6  = CPU mode, bit6 1=ROM 0=DRAM, bit5 1=Z80 0=R800
+    --       R#13 = 03h, R#14 = 2Fh, R#15 = 8Bh, others = FFh
+    -- the R800 is emulated by the T80 at 10.74MHz with MULU opcodes,
+    -- the DRAM mode is only stored, the BIOS is always read from ROM
+    ----------------------------------------------------------------
+    process( clk21m, reset )
+    begin
+        if( reset = '1' )then
+            s1990_sel <= (others => '0');
+            s1990_cpu <= "11";                                                          -- Z80, ROM mode
+        elsif( clk21m'event and clk21m = '1' )then
+            if( s1990_req = '1' and wrt = '1' )then
+                if( adr(0) = '0' )then
+                    s1990_sel <= dbo;
+                elsif( s1990_sel = X"06" )then
+                    s1990_cpu <= dbo(6 downto 5);
+                end if;
+            end if;
+        end if;
+    end process;
+
+    s1990_dbi   <=  s1990_sel                       when( adr(0) = '0' )else
+                    "00000000"                      when( s1990_sel = X"05" )else
+                    "0" & s1990_cpu & "00000"       when( s1990_sel = X"06" )else
+                    X"03"                           when( s1990_sel = X"0D" )else
+                    X"2F"                           when( s1990_sel = X"0E" )else
+                    X"8B"                           when( s1990_sel = X"0F" )else
+                    X"FF";
+
+    s1990_r800  <=  portF4_mode and not s1990_cpu(5);
 
     ----------------------------------------------------------------
     -- PPI(8255) / primary-slot, keyboard, 1bit sound port
@@ -2123,6 +2172,7 @@ begin
     Scc2Req     <=  req when( iSltScc2 = '1'                                                                            )else '0';  -- MEM:       / ESE-SCC2
     ErmReq      <=  req when( iSltErm  = '1'                                                                            )else '0';  -- MEM:       / ESE-RAM, MegaSD
     RtcReq      <=  req when( mem = '0' and adr(7 downto 1) = "1011010"                                                 )else '0';  -- I/O:B4-B5h / RTC (RP-5C01)
+    s1990_req   <=  req when( mem = '0' and adr(7 downto 1) = "1110010" and portF4_mode = '1'                          )else '0';  -- I/O:E4-E5h / S1990 registers
     systim_req  <=  req when( mem = '0' and adr(7 downto 1) = "1110011"                                                 )else '0';  -- I/O:E6-E7h / System timer (S1990)
     swio_req    <=  req when( mem = '0' and adr(7 downto 4) = "0100"                                                    )else '0';  -- I/O:40-4Fh / Switched I/O ports
     portF2_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                             )else '0';  -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
@@ -2137,6 +2187,7 @@ begin
                 '1' when( pSltAdr(7 downto 1) = "1101100"                                       )else   -- I/O:D8-D9h / Kanji-data (JIS1 only)
                 '1' when( pSltAdr(7 downto 2) = "111111"                                        )else   -- I/O:FC-FFh / Memory-mapper
                 '1' when( pSltAdr(7 downto 1) = "1011010"                                       )else   -- I/O:B4-B5h / RTC (RP-5C01)
+                '1' when( pSltAdr(7 downto 1) = "1110010" and portF4_mode = '1'                 )else   -- I/O:E4-E5h / S1990 registers
                 '1' when( pSltAdr(7 downto 1) = "1110011"                                       )else   -- I/O:E6-E7h / System timer (S1990)
                 '1' when( pSltAdr(7 downto 4) = "0100" and io40_n /= "11111111"                 )else   -- I/O:40-4Fh / Switched I/O ports
                 '1' when( pSltAdr(7 downto 0) = "10100111" and portF4_mode = '1'                )else   -- I/O:A7h    / Pause R800 (read only)
