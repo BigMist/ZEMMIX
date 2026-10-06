@@ -1436,7 +1436,7 @@ begin
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
-            xSltRst_n <= pSltRst_n or RstKeyLock;                                       -- hard reset /w lock
+            xSltRst_n <= pSltRst_n;                                                     -- hard reset (OSD / image mount): no port $43 reset lock (RstKeyLock is not initialized by switched_io_ports)
         end if;
     end process;
 
