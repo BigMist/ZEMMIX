@@ -1094,6 +1094,7 @@ architecture RTL of emsx_top is
     signal  s1990_sel       : std_logic_vector(  7 downto 0 );                      -- E4h: register select
     signal  s1990_cpu       : std_logic_vector(  6 downto 5 );                      -- R#6: bit6 1=ROM 0=DRAM, bit5 1=Z80 0=R800
     signal  s1990_dbi       : std_logic_vector(  7 downto 0 );
+    signal  s1990_drop      : std_logic_vector(  7 downto 0 );                      -- window to drop the CHGCPU OTIR leftover
     signal  s1990_r800      : std_logic;                                            -- '1' => R800 selected (MSXtR only)
 
     -- turboR PCM device
@@ -1953,18 +1954,35 @@ begin
     --       R#13 = 03h, R#14 = 2Fh, R#15 = 8Bh, others = FFh
     -- the R800 is emulated by the T80 at 10.74MHz with MULU opcodes,
     -- the DRAM mode is only stored, the BIOS is always read from ROM
+    --
+    -- CHGCPU switches Z80 > R800 with an OTIR of two bytes to E5h
+    -- (e.g. 40h, 60h): on a real turboR the 1st byte freezes the Z80
+    -- inside the OTIR and the 2nd one is only sent when the Z80 is
+    -- resumed. With a single CPU that 2nd byte (back to Z80) follows
+    -- at once, so it is dropped if it comes within ~12us
     ----------------------------------------------------------------
     process( clk21m, reset )
     begin
         if( reset = '1' )then
             s1990_sel <= (others => '0');
             s1990_cpu <= "11";                                                          -- Z80, ROM mode
+            s1990_drop <= (others => '0');
         elsif( clk21m'event and clk21m = '1' )then
+            if( s1990_drop /= X"00" )then
+                s1990_drop <= s1990_drop - 1;
+            end if;
             if( s1990_req = '1' and wrt = '1' )then
                 if( adr(0) = '0' )then
                     s1990_sel <= dbo;
                 elsif( s1990_sel = X"06" )then
-                    s1990_cpu <= dbo(6 downto 5);
+                    if( s1990_drop /= X"00" and dbo(5) = '1' )then
+                        s1990_drop <= (others => '0');                                  -- frozen Z80 leftover, dropped
+                    else
+                        s1990_cpu <= dbo(6 downto 5);
+                        if( s1990_cpu(5) = '1' and dbo(5) = '0' )then
+                            s1990_drop <= (others => '1');                              -- Z80 > R800: 255 x 46.5ns
+                        end if;
+                    end if;
                 end if;
             end if;
         end if;
