@@ -707,8 +707,12 @@ assign opl_ul={opll_u} + {opl3_ul};
 assign opl_ur={opll_u} + {opl3_ur};
 assign tape_sound = status[9]? {8'b0,AUDIO_IN,7'b0} : 16'bZ ;
 
-assign sum_audioR = opl_ur + scc_ur + {1'b0,psg_o,6'b0} + {TrPcm_o,TrPcm_o} + tape_sound;
-assign sum_audioL = opl_ul + scc_ul + {1'b0,psg_o,6'b0} + {TrPcm_o,TrPcm_o} + tape_sound;
+// turboR PCM: signed 8 bits, sign extended and scaled like the other sources (x64,
+// +-8192); {TrPcm_o,TrPcm_o} was full scale and wrapped the 16-bit sum
+wire signed [15:0] trpcm_s = {{2{TrPcm_o[7]}}, TrPcm_o, 6'b0};
+
+assign sum_audioR = opl_ur + scc_ur + {1'b0,psg_o,6'b0} + trpcm_s + tape_sound;
+assign sum_audioL = opl_ul + scc_ul + {1'b0,psg_o,6'b0} + trpcm_s + tape_sound;
 
 wire [2:0] vol_o;
 
