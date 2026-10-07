@@ -1114,11 +1114,12 @@ architecture RTL of emsx_top is
     signal  r8_stall        : std_logic;                                            -- R800 ahead of a real R800
     signal  r8_iohold       : std_logic;                                            -- R800 I/O before its real time
     signal  r8_started      : std_logic;                                            -- the R800 runs from reset at its first selection
-    signal  r8_sel_d        : std_logic;
-    signal  sw_gap          : std_logic_vector(  1 downto 0 );                      -- idle internal bus right after a CPU switch
-    signal  z80_hold        : std_logic;                                            -- Z80 frozen by WAIT (from its next bus cycle)
-    signal  z80_resume      : std_logic_vector(  3 downto 0 );                      -- waits for the frozen Z80 cycle, redone by the bus
-    signal  z_wait_n        : std_logic;
+    signal  r8_owner        : std_logic;                                            -- the R800 owns the bus (the Z80 has released it)
+    signal  r8_parked       : std_logic;                                            -- the R800 is stopped on the T1 of an M1
+    signal  z80_busrq_n     : std_logic;
+    signal  z80_busak_n     : std_logic;
+    signal  r8_ext          : std_logic;                                            -- R800 access to an external slot / I/O port
+    signal  r8_ext_cnt      : std_logic_vector(  2 downto 0 );
     signal  c_merq_n        : std_logic;                                            -- CPU bus seen by the internal bus registers
     signal  c_iorq_n        : std_logic;
     signal  c_rd_n          : std_logic;
@@ -1693,19 +1694,26 @@ begin
     pSltCs2_n   <=  pSltRd_n when( pSltAdr(15 downto 14) = "10" )else '1';
     pSltCs12_n  <=  pSltRd_n when( pSltAdr(15 downto 14) = "01" )else
                     pSltRd_n when( pSltAdr(15 downto 14) = "10" )else '1';
-    pSltM1_n    <=  CpuM1_n;
-    pSltRfsh_n  <=  CpuRfsh_n;
+    pSltM1_n    <=  r8_m1_n     when( r8_owner = '1' )else CpuM1_n;
+    pSltRfsh_n  <=  r8_rfsh_n   when( r8_owner = '1' )else CpuRfsh_n;
+
+    -- the R800 drives the slot bus while it owns it (the Z80 has released it)
+    pSltAdr     <=  r8_adr      when( r8_owner = '1' )else (others => 'Z');
+    pSltMerq_n  <=  r8_merq_n   when( r8_owner = '1' )else 'Z';
+    pSltIorq_n  <=  r8_iorq_n   when( r8_owner = '1' )else 'Z';
+    pSltRd_n    <=  r8_rd_n     when( r8_owner = '1' )else 'Z';
+    pSltWr_n    <=  r8_wr_n     when( r8_owner = '1' )else 'Z';
 
     pSltInt_n   <=  '0' when( pVdpInt_n = '0' ) or
                             ( opl3_Int_n = '0' and opl3_enabled = '1' )else
                     'Z';
 
     pSltSltsl_n <=  '1' when( Scc1Type /= "00" )else
-                    '0' when( pSltMerq_n = '0' and CpuRfsh_n = '1' and PriSltNum = "01" )else
+                    '0' when( pSltMerq_n = '0' and c_rfsh_n = '1' and PriSltNum = "01" )else
                     '1';
 
     pSltSlts2_n <=  '1' when( Slot2Mode /= "00" )else
-                    '0' when( pSltMerq_n = '0' and CpuRfsh_n = '1' and PriSltNum = "10" )else
+                    '0' when( pSltMerq_n = '0' and c_rfsh_n = '1' and PriSltNum = "10" )else
                     '1';
 
     pSltBdir_n  <=  'Z';
@@ -1718,7 +1726,8 @@ begin
                     '1' when( pSltMerq_n = '0' and PriSltNum = "10" and Slot2Mode /= "00" )else
                     '0';
 
-    pSltDat     <=  dbi when( BusDir_o = '1' )else
+    pSltDat     <=  dbi     when( BusDir_o = '1' )else
+                    r8_dbo  when( r8_owner = '1' and r8_wr_n = '0' )else
                     (others => 'Z');
 
     pSltRsv5    <=  'Z';
@@ -1972,14 +1981,17 @@ begin
     ----------------------------------------------------------------
     -- R800 (MSXtR): a second CPU, like the real machine
     ----------------------------------------------------------------
-    -- The T80a (U01) stays the Z80 with the OCM derived clock and the
-    -- external bus. The R800 is a T80s on clk21m (21.48MHz) with the
-    -- R800 extensions, on the internal bus only. The S1990 R#6 selects
-    -- the running CPU and the other one is frozen with its state:
-    --  * Z80  : WAIT from its next bus cycle (the real Z80 stops inside
-    --           the CHGCPU OTIR and sends its 2nd byte when resumed)
+    -- The T80a (U01) stays the Z80 with the OCM derived clock. The R800
+    -- is a T80s on clk21m (21.48MHz) with the R800 extensions. The S1990
+    -- R#6 selects the running CPU, the other one is stopped with its state
+    -- and the bus (internal and cartridge slots) belongs to the running one:
+    --  * Z80  : BUSRQ, it ends its bus cycle and releases the bus (the real
+    --           Z80 stops inside the CHGCPU OTIR and sends its 2nd byte
+    --           when resumed)
     --  * R800 : clock enable off on the T1 of its next M1, so that no
-    --           bus cycle is left half done
+    --           bus cycle is left half done, then the Z80 gets the bus back
+    -- The R800 drives the cartridge slot bus while it owns it, an access
+    -- to an external slot or I/O port lasts like a Z80 one.
     -- The R800 starts from reset at its first selection (the BIOS uses
     -- the F4 bit 5 to tell it apart and parks it inside CHGCPU).
     -- An R800 access waits until it is really completed: the SDRAM CPU
@@ -2030,13 +2042,14 @@ begin
         end if;
     end process;
 
-    r8_hit  <=  '1' when( s1990_r800 = '1' and rc_rd = '1' and rc_cacheable = '1' and
+    r8_hit  <=  '1' when( r8_owner = '1' and rc_rd = '1' and rc_cacheable = '1' and
                           rc_q(19) = '1' and rc_q(18 downto 8) = CpuAdr(24 downto 14) )else '0';
     r8_dbi  <=  rc_q(7 downto 0)    when( r8_hit = '1' )else
+                pSltDat             when( r8_ext = '1' and r8_rd_n = '0' )else             -- from a cartridge
                 dbi;
 
     rc_we   <=  '1' when( reset = '1' or w_wrt_req = '1' )else
-                '1' when( s1990_r800 = '1' and rc_rd = '1' and rc_cacheable = '1' and r8_hit = '0' and rc_done = '1' )else
+                '1' when( r8_owner = '1' and rc_rd = '1' and rc_cacheable = '1' and r8_hit = '0' and rc_done = '1' )else
                 '0';
     rc_wa   <=  rc_clr                  when( reset = '1' )else
                 CpuAdr(13 downto 0);
@@ -2057,76 +2070,40 @@ begin
     end process;
 
     -- R800 speed: hold the T80s when it is faster than a real R800 (see r800_timing.vhd)
-    r8_active <= s1990_r800 and r8_started;
-
-    U01_R8T : entity work.r800_timing
-        port map(
-            clk21m      => clk21m,
-            reset       => reset,
-            active      => r8_active,
-            m1_n        => r8_m1_n,
-            merq_n      => r8_merq_n,
-            iorq_n      => r8_iorq_n,
-            rd_n        => r8_rd_n,
-            wr_n        => r8_wr_n,
-            rfsh_n      => r8_rfsh_n,
-            wait_n      => r8_wait_n,
-            adr         => r8_adr,
-            di          => r8_dbi,
-            ppi_a       => PpiPortA,
-            exp0        => ExpSlot0,
-            exp3        => ExpSlot3,
-            dram_mode   => not s1990_cpu(6),
-            stall       => r8_stall,
-            io_hold     => r8_iohold
-        );
-
-    r8_cen  <=  '0' when( r8_started = '0' or r8_stall = '1' )else
+    r8_active <= r8_owner;
+    r8_cen  <=  '0' when( r8_owner = '0' or r8_stall = '1' )else
                 '0' when( s1990_r800 = '0' and r8_m1_n = '0' and r8_merq_n = '1' )else
                 '1';
 
+    r8_parked   <= '1' when( r8_started = '0' or (r8_m1_n = '0' and r8_merq_n = '1' and r8_iorq_n = '1') )else '0';
+    z80_busrq_n <= '0' when( s1990_r800 = '1' or r8_owner = '1' )else '1';
+
+    -- bus owner: the R800 once the Z80 has released the bus, the Z80 again once the R800 is stopped
     process( reset, clk21m )
     begin
         if( reset = '1' )then
+            r8_owner    <= '0';
             r8_started  <= '0';
-            r8_sel_d    <= '0';
-            sw_gap      <= "00";
-            z80_hold    <= '0';
-            z80_resume  <= "0000";
         elsif( clk21m'event and clk21m = '1' )then
-            if( s1990_r800 = '1' )then
-                r8_started <= '1';
-            end if;
-            r8_sel_d <= s1990_r800;
-            if( s1990_r800 /= r8_sel_d )then
-                sw_gap <= "10";
-            elsif( sw_gap /= "00" )then
-                sw_gap <= sw_gap - 1;
-            end if;
-            if( s1990_r800 = '1' )then
-                if( pSltMerq_n = '1' and pSltIorq_n = '1' )then
-                    z80_hold <= '1';
+            if( r8_owner = '0' )then
+                if( s1990_r800 = '1' and z80_busak_n = '0' )then
+                    r8_owner   <= '1';
+                    r8_started <= '1';
                 end if;
-                z80_resume <= "0000";
-            elsif( z80_hold = '1' )then
-                z80_hold   <= '0';
-                z80_resume <= "1100";                                   -- 12 x clk21m
-            elsif( z80_resume /= "0000" )then
-                z80_resume <= z80_resume - 1;
+            elsif( s1990_r800 = '0' and r8_parked = '1' )then
+                r8_owner <= '0';
             end if;
         end if;
     end process;
 
-    z_wait_n <= '0' when( z80_hold = '1' or z80_resume /= "0000" )else wait_n_s;
-
-    -- CPU bus seen by the internal bus registers, idle for 2 clocks on a switch
-    c_merq_n <= '1' when( sw_gap /= "00" )else r8_merq_n when( s1990_r800 = '1' )else pSltMerq_n;
-    c_iorq_n <= '1' when( sw_gap /= "00" )else r8_iorq_n when( s1990_r800 = '1' )else pSltIorq_n;
-    c_rd_n   <= '1' when( sw_gap /= "00" )else r8_rd_n   when( s1990_r800 = '1' )else pSltRd_n;
-    c_wr_n   <= '1' when( sw_gap /= "00" )else r8_wr_n   when( s1990_r800 = '1' )else pSltWr_n;
-    c_rfsh_n <= r8_rfsh_n   when( s1990_r800 = '1' )else CpuRfsh_n;
-    c_adr    <= r8_adr      when( s1990_r800 = '1' )else pSltAdr;
-    c_dat    <= r8_dbo      when( s1990_r800 = '1' )else pSltDat;
+    -- CPU bus seen by the internal bus registers (idle while the bus changes hands)
+    c_merq_n <= r8_merq_n when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltMerq_n;
+    c_iorq_n <= r8_iorq_n when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltIorq_n;
+    c_rd_n   <= r8_rd_n   when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltRd_n;
+    c_wr_n   <= r8_wr_n   when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltWr_n;
+    c_rfsh_n <= r8_rfsh_n when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else CpuRfsh_n;
+    c_adr    <= r8_adr    when( r8_owner = '1' )else pSltAdr;
+    c_dat    <= r8_dbo    when( r8_owner = '1' )else pSltDat;
 
     -- R800 bus cycle tracking
     rc_rd   <=  '1' when( r8_merq_n = '0' and r8_rd_n = '0' )else '0';
@@ -2140,7 +2117,7 @@ begin
             rc_wram <= '0';
             rc_cnt  <= (others => '0');
         elsif( clk21m'event and clk21m = '1' )then
-            if( s1990_r800 = '0' or (rc_rd = '0' and rc_wr = '0' and rc_io = '0') )then
+            if( r8_owner = '0' or (rc_rd = '0' and rc_wr = '0' and rc_io = '0') )then
                 rc_req  <= '0';
                 rc_wram <= '0';
                 rc_cnt  <= (others => '0');
@@ -2176,18 +2153,40 @@ begin
         end if;
     end process;
 
-    r8_wait_n <= '1' when( s1990_r800 = '0' )else                                         -- leaving: let it reach its next M1
+    r8_wait_n <= '1' when( r8_owner = '0' )else                                           -- stopped anyway
                  '1' when( r8_hit = '1' )else                                             -- cache hit: no wait state
                  '0' when( (rc_rd = '1' or rc_wr = '1' or rc_io = '1') and rc_done = '0' )else
+                 '0' when( r8_ext = '1' and r8_ext_cnt /= "111" )else                     -- external: as long as a Z80 access
                  '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or r8_xwait_d = '0' )else
                  '1';
+
+    -- R800 access to the cartridge slots (no internal device answers): the strobes last
+    -- about 8 clk21m (370ns), like a Z80 access, for the cartridges
+    r8_ext  <=  '0' when( r8_owner = '0' or (rc_rd = '0' and rc_wr = '0' and rc_io = '0') )else
+                '1' when( mem = '1' and PriSltNum = "01" and Scc1Type = "00" )else
+                '1' when( mem = '1' and PriSltNum = "10" and Slot2Mode = "00" )else
+                '1' when( mem = '0' and BusDir = '0' )else
+                '0';
+
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            r8_ext_cnt <= (others => '0');
+        elsif( clk21m'event and clk21m = '1' )then
+            if( r8_ext = '0' )then
+                r8_ext_cnt <= (others => '0');
+            elsif( r8_ext_cnt /= "111" )then
+                r8_ext_cnt <= r8_ext_cnt + 1;
+            end if;
+        end if;
+    end process;
 
     -- the MegaSD data port (4000-57FFh) and the V9968 ignore/overwrite an access that comes
     -- while the previous one is running, the R800 is fast enough for that: hold the request.
     -- Only before it is issued: the access itself makes the device busy, and the MegaSD gets
     -- its ack from the SDRAM slot (RamAck), so dropping req then would restart it forever.
-    rc_mmcbusy <= s1990_r800 and (not rc_req) and mem and iSltErm and MmcEna and MmcAct when( adr(15 downto 13) = "010" and adr(12 downto 11) /= "11" )else '0';
-    rc_vdpbusy <= s1990_r800 and (not rc_req) and (not mem) and vdp_busy when( adr(7 downto 3) = "10011" )else '0';
+    rc_mmcbusy <= r8_owner and (not rc_req) and mem and iSltErm and MmcEna and MmcAct when( adr(15 downto 13) = "010" and adr(12 downto 11) /= "11" )else '0';
+    rc_vdpbusy <= r8_owner and (not rc_req) and (not mem) and vdp_busy when( adr(7 downto 3) = "10011" )else '0';
 
     ----------------------------------------------------------------
     -- Port F2 (ESP8266 BIOS)
@@ -3017,10 +3016,10 @@ begin
             RESET_n     => (not reset),
             R800_mode   => '0',                 -- the Z80 (the R800 is U01_R8)
             CLK_n       => iCpuClk,
-            WAIT_n      => z_wait_n,
+            WAIT_n      => wait_n_s,
             INT_n       => pSltInt_n,
             NMI_n       => '1',
-            BUSRQ_n     => '1',
+            BUSRQ_n     => z80_busrq_n,
             M1_n        => CpuM1_n,
             MREQ_n      => pSltMerq_n,
             IORQ_n      => pSltIorq_n,
@@ -3028,7 +3027,7 @@ begin
             WR_n        => pSltWr_n,
             RFSH_n      => CpuRfsh_n,
             HALT_n      => open,
-            BUSAK_n     => open,
+            BUSAK_n     => z80_busak_n,
             A           => pSltAdr,
             D           => pSltDat
         );
