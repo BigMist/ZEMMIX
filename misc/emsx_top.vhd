@@ -2070,7 +2070,31 @@ begin
     end process;
 
     -- R800 speed: hold the T80s when it is faster than a real R800 (see r800_timing.vhd)
+    -- R800 speed: hold the T80s when it is faster than a real R800 (see r800_timing.vhd)
     r8_active <= r8_owner;
+
+    U01_R8T : entity work.r800_timing
+        port map(
+            clk21m      => clk21m,
+            reset       => reset,
+            active      => r8_active,
+            m1_n        => r8_m1_n,
+            merq_n      => r8_merq_n,
+            iorq_n      => r8_iorq_n,
+            rd_n        => r8_rd_n,
+            wr_n        => r8_wr_n,
+            rfsh_n      => r8_rfsh_n,
+            wait_n      => r8_wait_n,
+            adr         => r8_adr,
+            di          => r8_dbi,
+            ppi_a       => PpiPortA,
+            exp0        => ExpSlot0,
+            exp3        => ExpSlot3,
+            dram_mode   => not s1990_cpu(6),
+            stall       => r8_stall,
+            io_hold     => r8_iohold
+        );
+
     r8_cen  <=  '0' when( r8_owner = '0' or r8_stall = '1' )else
                 '0' when( s1990_r800 = '0' and r8_m1_n = '0' and r8_merq_n = '1' )else
                 '1';
