@@ -1133,6 +1133,16 @@ architecture RTL of emsx_top is
     signal  rc_mmcbusy      : std_logic;
     signal  rc_vdpbusy      : std_logic;
     signal  vdp_busy        : std_logic;
+    type    r8_cache_t      is array( 0 to 16383 ) of std_logic_vector( 19 downto 0 );    -- valid & tag(CpuAdr 24..14) & data
+    signal  r8_cache        : r8_cache_t;                                           -- R800 read cache of the SDRAM
+    signal  rc_q            : std_logic_vector( 19 downto 0 );
+    signal  rc_cacheable    : std_logic;
+    signal  r8_hit          : std_logic;
+    signal  r8_dbi          : std_logic_vector(  7 downto 0 );
+    signal  rc_we           : std_logic;
+    signal  rc_wa           : std_logic_vector( 13 downto 0 );
+    signal  rc_wd           : std_logic_vector( 19 downto 0 );
+    signal  rc_clr          : std_logic_vector( 13 downto 0 ) := (others => '0');
     signal  sdr_slot_adr    : std_logic_vector( 24 downto 0 );                      -- SDRAM CPU slot tracking
     signal  sdr_slot_ok     : std_logic := '0';
     signal  sdr_rd_adr      : std_logic_vector( 24 downto 0 );
@@ -1995,9 +2005,49 @@ begin
             HALT_n      => open,
             BUSAK_n     => open,
             A           => r8_adr,
-            DI          => dbi,
+            DI          => r8_dbi,
             DO          => r8_dbo
         );
+
+    -- R800 read cache: 16K byte lines, direct mapped on the physical address (CpuAdr),
+    -- write through. Every CPU write to the SDRAM updates it (Z80 too), it is cleared
+    -- during reset (RstSeq clears SDRAM areas). A hit has no wait state: the address
+    -- is registered at the start of T2, the entry is read at the clk21m falling edge
+    -- and the data is taken at the end of T2 (half a clk21m cycle, constrained).
+    rc_cacheable <= mem and jSltMem and (not jSltScc1) and (not jSltScc2);
+
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '0' )then
+            rc_q <= r8_cache( conv_integer(CpuAdr(13 downto 0)) );
+        end if;
+    end process;
+
+    r8_hit  <=  '1' when( s1990_r800 = '1' and rc_rd = '1' and rc_cacheable = '1' and
+                          rc_q(19) = '1' and rc_q(18 downto 8) = CpuAdr(24 downto 14) )else '0';
+    r8_dbi  <=  rc_q(7 downto 0)    when( r8_hit = '1' )else
+                dbi;
+
+    rc_we   <=  '1' when( reset = '1' or w_wrt_req = '1' )else
+                '1' when( s1990_r800 = '1' and rc_rd = '1' and rc_cacheable = '1' and r8_hit = '0' and rc_done = '1' )else
+                '0';
+    rc_wa   <=  rc_clr                  when( reset = '1' )else
+                CpuAdr(13 downto 0);
+    rc_wd   <=  (others => '0')                         when( reset = '1' )else
+                '1' & CpuAdr(24 downto 14) & dbo        when( w_wrt_req = '1' )else
+                '1' & CpuAdr(24 downto 14) & RamDbi;
+
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            if( rc_we = '1' )then
+                r8_cache( conv_integer(rc_wa) ) <= rc_wd;
+            end if;
+            if( reset = '1' )then
+                rc_clr <= rc_clr + 1;
+            end if;
+        end if;
+    end process;
 
     r8_cen  <=  '0' when( r8_started = '0' )else
                 '0' when( s1990_r800 = '0' and r8_m1_n = '0' and r8_merq_n = '1' )else
@@ -2084,6 +2134,7 @@ begin
                 '1';
 
     r8_wait_n <= '1' when( s1990_r800 = '0' )else                                         -- leaving: let it reach its next M1
+                 '1' when( r8_hit = '1' )else                                             -- cache hit: no wait state
                  '0' when( (rc_rd = '1' or rc_wr = '1' or rc_io = '1') and rc_done = '0' )else
                  '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' )else
                  '1';
