@@ -1110,6 +1110,9 @@ architecture RTL of emsx_top is
     signal  r8_rfsh_n       : std_logic;
     signal  r8_adr          : std_logic_vector( 15 downto 0 );
     signal  r8_dbo          : std_logic_vector(  7 downto 0 );
+    signal  r8_active       : std_logic;                                            -- the R800 is the running CPU
+    signal  r8_stall        : std_logic;                                            -- R800 ahead of a real R800
+    signal  r8_iohold       : std_logic;                                            -- R800 I/O before its real time
     signal  r8_started      : std_logic;                                            -- the R800 runs from reset at its first selection
     signal  r8_sel_d        : std_logic;
     signal  sw_gap          : std_logic_vector(  1 downto 0 );                      -- idle internal bus right after a CPU switch
@@ -1946,6 +1949,7 @@ begin
 
     -- access request, CPU > Components
     req     <=  '0'         when( rc_mmcbusy = '1' or rc_vdpbusy = '1' )else   -- R800: device busy, hold the request
+                '0'         when( r8_iohold = '1' and rc_req = '0' )else       -- R800: I/O at the real R800 time
                 '1'         when( ((iSltMerq_n = '0') or (iSltIorq_n = '0')) and
                                   ((xSltRd_n = '0') or (xSltWr_n = '0')) and iack = '0' )else '0';
 
@@ -2052,7 +2056,32 @@ begin
         end if;
     end process;
 
-    r8_cen  <=  '0' when( r8_started = '0' )else
+    -- R800 speed: hold the T80s when it is faster than a real R800 (see r800_timing.vhd)
+    r8_active <= s1990_r800 and r8_started;
+
+    U01_R8T : entity work.r800_timing
+        port map(
+            clk21m      => clk21m,
+            reset       => reset,
+            active      => r8_active,
+            m1_n        => r8_m1_n,
+            merq_n      => r8_merq_n,
+            iorq_n      => r8_iorq_n,
+            rd_n        => r8_rd_n,
+            wr_n        => r8_wr_n,
+            rfsh_n      => r8_rfsh_n,
+            wait_n      => r8_wait_n,
+            adr         => r8_adr,
+            di          => r8_dbi,
+            ppi_a       => PpiPortA,
+            exp0        => ExpSlot0,
+            exp3        => ExpSlot3,
+            dram_mode   => not s1990_cpu(6),
+            stall       => r8_stall,
+            io_hold     => r8_iohold
+        );
+
+    r8_cen  <=  '0' when( r8_started = '0' or r8_stall = '1' )else
                 '0' when( s1990_r800 = '0' and r8_m1_n = '0' and r8_merq_n = '1' )else
                 '1';
 

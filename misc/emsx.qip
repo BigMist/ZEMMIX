@@ -45,4 +45,5 @@ set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path)../ocm-p
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/swioports.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/systemtimer.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sys/pll4x.vhd]
+set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) r800_timing.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) emsx_top.vhd]
