@@ -2154,9 +2154,11 @@ begin
                  '1';
 
     -- the MegaSD data port (4000-57FFh) and the V9968 ignore/overwrite an access that comes
-    -- while the previous one is running, the R800 is fast enough for that: hold the request
-    rc_mmcbusy <= s1990_r800 and mem and iSltErm and MmcEna and MmcAct when( adr(15 downto 13) = "010" and adr(12 downto 11) /= "11" )else '0';
-    rc_vdpbusy <= s1990_r800 and (not mem) and vdp_busy when( adr(7 downto 3) = "10011" )else '0';
+    -- while the previous one is running, the R800 is fast enough for that: hold the request.
+    -- Only before it is issued: the access itself makes the device busy, and the MegaSD gets
+    -- its ack from the SDRAM slot (RamAck), so dropping req then would restart it forever.
+    rc_mmcbusy <= s1990_r800 and (not rc_req) and mem and iSltErm and MmcEna and MmcAct when( adr(15 downto 13) = "010" and adr(12 downto 11) /= "11" )else '0';
+    rc_vdpbusy <= s1990_r800 and (not rc_req) and (not mem) and vdp_busy when( adr(7 downto 3) = "10011" )else '0';
 
     ----------------------------------------------------------------
     -- Port F2 (ESP8266 BIOS)
