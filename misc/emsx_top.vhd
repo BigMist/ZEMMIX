@@ -1985,7 +1985,9 @@ begin
         generic map(
             Mode        => 0,
             T2Write     => 1,
-            IOWait      => 1
+            IOWait      => 1,
+            MulDlyB     => 34,                  -- MULUB = 14 R800 cycles at 21.48MHz
+            MulDlyW     => 107                  -- MULUW = 36 R800 cycles at 21.48MHz
         )
         port map(
             RESET_n     => (not reset),
