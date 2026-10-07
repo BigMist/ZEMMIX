@@ -37,6 +37,7 @@ module vdp #(
 
 	output				int_n,
 	output				wait_n,
+	output				busy,			//	a request (read or write) is still running in the V9968
 
 	output				pramoe_n,
 	output				pramwe_n,
@@ -150,6 +151,7 @@ module vdp #(
 	reg			[7:0]	ff_req_wdata = 8'd0;
 	reg					ff_ack = 1'b0;
 	reg					ff_read_wait = 1'b0;
+	reg					ff_busy = 1'b0;
 	reg			[2:0]	ff_done_sync = 3'd0;
 	reg			[7:0]	ff_dbi = 8'hFF;
 	wire				w_done;
@@ -167,6 +169,7 @@ module vdp #(
 		if( reset ) begin
 			ff_req_toggle	<= 1'b0;
 			ff_read_wait	<= 1'b0;
+			ff_busy			<= 1'b0;
 			ff_dbi			<= 8'hFF;
 		end
 		else begin
@@ -176,9 +179,11 @@ module vdp #(
 				ff_req_wdata	<= dbo;
 				ff_req_toggle	<= ~ff_req_toggle;
 				ff_read_wait	<= ~wrt;
+				ff_busy			<= 1'b1;
 			end
 			else if( w_done ) begin
 				ff_read_wait	<= 1'b0;
+				ff_busy			<= 1'b0;
 			end
 
 			if( w_done && !ff_req_write ) begin
@@ -190,6 +195,7 @@ module vdp #(
 	assign ack		= ff_ack;
 	assign dbi		= ff_dbi;
 	assign wait_n	= ~(ff_read_wait | req & ~wrt);
+	assign busy		= ff_busy;		//	a new request now would overwrite the running one (R800 fast path holds it)
 
 	// --------------------------------------------------------------------
 	//	Host bus bridge, core side (as msx_slot of the cartridge)

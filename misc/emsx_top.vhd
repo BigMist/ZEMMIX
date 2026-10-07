@@ -453,7 +453,9 @@ architecture RTL of emsx_top is
             VDP_ID          : in    std_logic_vector(  4 downto 0 );
             OFFSET_Y        : in    std_logic_vector(  6 downto 0 );
 
-            wait_n          : out   std_logic                           -- V9968: VRAM read in progress
+            wait_n          : out   std_logic;                           -- V9968: VRAM read in progress
+
+            busy            : out   std_logic                           -- V9968: a request is still running
         );
     end component;
 
@@ -1088,14 +1090,56 @@ architecture RTL of emsx_top is
     -- Port F4 device
     signal  portF4_req      : std_logic;
     signal  portF4_bit7     : std_logic;                                            -- 1=hard reset, 0=soft reset
+    signal  portF4_bit5     : std_logic;                                            -- MSXtR: set by the Z80 boot, read by the R800 at reset
 
     -- S1990 registers (I/O $E4-$E5)
     signal  s1990_req       : std_logic;
     signal  s1990_sel       : std_logic_vector(  7 downto 0 );                      -- E4h: register select
     signal  s1990_cpu       : std_logic_vector(  6 downto 5 );                      -- R#6: bit6 1=ROM 0=DRAM, bit5 1=Z80 0=R800
     signal  s1990_dbi       : std_logic_vector(  7 downto 0 );
-    signal  s1990_drop      : std_logic_vector(  7 downto 0 );                      -- window to drop the CHGCPU OTIR leftover
     signal  s1990_r800      : std_logic;                                            -- '1' => R800 selected (MSXtR only)
+
+    -- R800: a second CPU (T80s on clk21m) on the internal bus, the T80a is the Z80
+    signal  r8_cen          : std_logic;
+    signal  r8_wait_n       : std_logic;
+    signal  r8_merq_n       : std_logic;
+    signal  r8_iorq_n       : std_logic;
+    signal  r8_rd_n         : std_logic;
+    signal  r8_wr_n         : std_logic;
+    signal  r8_m1_n         : std_logic;
+    signal  r8_rfsh_n       : std_logic;
+    signal  r8_adr          : std_logic_vector( 15 downto 0 );
+    signal  r8_dbo          : std_logic_vector(  7 downto 0 );
+    signal  r8_started      : std_logic;                                            -- the R800 runs from reset at its first selection
+    signal  r8_sel_d        : std_logic;
+    signal  sw_gap          : std_logic_vector(  1 downto 0 );                      -- idle internal bus right after a CPU switch
+    signal  z80_hold        : std_logic;                                            -- Z80 frozen by WAIT (from its next bus cycle)
+    signal  z80_resume      : std_logic_vector(  3 downto 0 );                      -- waits for the frozen Z80 cycle, redone by the bus
+    signal  z_wait_n        : std_logic;
+    signal  c_merq_n        : std_logic;                                            -- CPU bus seen by the internal bus registers
+    signal  c_iorq_n        : std_logic;
+    signal  c_rd_n          : std_logic;
+    signal  c_wr_n          : std_logic;
+    signal  c_rfsh_n        : std_logic;
+    signal  c_adr           : std_logic_vector( 15 downto 0 );
+    signal  c_dat           : std_logic_vector(  7 downto 0 );
+    signal  rc_rd           : std_logic;                                            -- R800 bus cycle tracking
+    signal  rc_wr           : std_logic;
+    signal  rc_io           : std_logic;
+    signal  rc_req          : std_logic;
+    signal  rc_wram         : std_logic;
+    signal  rc_cnt          : std_logic_vector(  2 downto 0 );
+    signal  rc_done         : std_logic;
+    signal  rc_mmcbusy      : std_logic;
+    signal  rc_vdpbusy      : std_logic;
+    signal  vdp_busy        : std_logic;
+    signal  sdr_slot_adr    : std_logic_vector( 24 downto 0 );                      -- SDRAM CPU slot tracking
+    signal  sdr_slot_ok     : std_logic := '0';
+    signal  sdr_rd_adr      : std_logic_vector( 24 downto 0 );
+    signal  sdr_rd_ok       : std_logic := '0';
+    signal  sdr_wr_adr      : std_logic_vector( 24 downto 0 );
+    signal  sdr_wr_dat      : std_logic_vector(  7 downto 0 );
+    signal  sdr_wr_ok       : std_logic := '0';
 
     -- turboR PCM device
     signal  tr_pcm_req      : std_logic;
@@ -1296,10 +1340,7 @@ begin
                     ff_clksel5m_n   <=  '1';
                     ff_clksel       <=  '1';
                 elsif( logo_timeout = "10" )then
-                    if( s1990_r800 = '1' )then                                          -- R800 selected (MSXtR) => 10.74MHz
-                        ff_clksel5m_n   <=  '1';
-                        ff_clksel       <=  '1';
-                    elsif( io42_id212(0) = '0' )then
+                    if( io42_id212(0) = '0' )then
                         ff_clksel5m_n   <=  io41_id008_n    and hybridclk_n;
                         ff_clksel       <=  io42_id212(0)   and hybridclk_n;
                     else
@@ -1766,13 +1807,13 @@ begin
         elsif( clk21m'event and clk21m = '1' )then
 
             -- MSX slot signals
-            iSltRfsh_n      <= pSltRfsh_n;
-            iSltMerq_n      <= pSltMerq_n;
-            iSltIorq_n      <= pSltIorq_n;
-            xSltRd_n        <= pSltRd_n;
-            xSltWr_n        <= pSltWr_n;
-            iSltAdr         <= pSltAdr;
-            iSltDat         <= pSltDat;
+            iSltRfsh_n      <= c_rfsh_n;
+            iSltMerq_n      <= c_merq_n;
+            iSltIorq_n      <= c_iorq_n;
+            xSltRd_n        <= c_rd_n;
+            xSltWr_n        <= c_wr_n;
+            iSltAdr         <= c_adr;
+            iSltDat         <= c_dat;
 
             if( iSltMerq_n  = '1' and iSltIorq_n = '1' )then
                 iack <= '0';
@@ -1818,7 +1859,7 @@ begin
             elsif( mem = '0' and adr(  7 downto 0 ) = "11110010" and portF2_ena = '1' and use_wifi_g )then                       -- Port F2 (ESP8266 BIOS)
                 dlydbi <= portF2;
             elsif( mem = '0' and adr(  7 downto 0 ) = "11110100" and portF4_mode = '1' )then                -- Port F4 normal (Z80 mode)
-                dlydbi <= portF4_bit7 & "0000000";
+                dlydbi <= portF4_bit7 & '0' & portF4_bit5 & "00000";
             elsif( mem = '0' and adr(  7 downto 0 ) = "11110100" )then                                      -- Port F4 inverted
                 dlydbi <= portF4_bit7 & "1111111";
             elsif( mem = '0' and adr(  7 downto 1 ) = "0000011" and use_wifi_g )then                        -- ESP ports 06-07h
@@ -1885,7 +1926,7 @@ begin
             end if;
 
             if( req = '0' )then
-                wrt <= not pSltWr_n;                                    -- 1=write, 0=read
+                wrt <= not c_wr_n;                                      -- 1=write, 0=read
             end if;
 
         end if;
@@ -1893,7 +1934,8 @@ begin
     end process;
 
     -- access request, CPU > Components
-    req     <=  '1'         when( ((iSltMerq_n = '0') or (iSltIorq_n = '0')) and
+    req     <=  '0'         when( rc_mmcbusy = '1' or rc_vdpbusy = '1' )else   -- R800: device busy, hold the request
+                '1'         when( ((iSltMerq_n = '0') or (iSltIorq_n = '0')) and
                                   ((xSltRd_n = '0') or (xSltWr_n = '0')) and iack = '0' )else '0';
 
     mem     <=  iSltIorq_n;                                             -- 1=memory area, 0=I/O area
@@ -1911,6 +1953,145 @@ begin
                 Scc2Dbi     when( jSltScc2 = '1' )else
                 RamDbi      when( jSltMem  = '1' )else
                 dlydbi;
+
+    ----------------------------------------------------------------
+    -- R800 (MSXtR): a second CPU, like the real machine
+    ----------------------------------------------------------------
+    -- The T80a (U01) stays the Z80 with the OCM derived clock and the
+    -- external bus. The R800 is a T80s on clk21m (21.48MHz) with the
+    -- R800 extensions, on the internal bus only. The S1990 R#6 selects
+    -- the running CPU and the other one is frozen with its state:
+    --  * Z80  : WAIT from its next bus cycle (the real Z80 stops inside
+    --           the CHGCPU OTIR and sends its 2nd byte when resumed)
+    --  * R800 : clock enable off on the T1 of its next M1, so that no
+    --           bus cycle is left half done
+    -- The R800 starts from reset at its first selection (the BIOS uses
+    -- the F4 bit 5 to tell it apart and parks it inside CHGCPU).
+    -- An R800 access waits until it is really completed: the SDRAM CPU
+    -- slot has read/written this very address, or the request of this
+    -- bus cycle has been acked (+3 clocks for registered device data).
+    ----------------------------------------------------------------
+    U01_R8 : entity work.T80s
+        generic map(
+            Mode        => 0,
+            T2Write     => 1,
+            IOWait      => 1
+        )
+        port map(
+            RESET_n     => (not reset),
+            R800_mode   => '1',
+            CLK         => clk21m,
+            CEN         => r8_cen,
+            WAIT_n      => r8_wait_n,
+            INT_n       => pSltInt_n,
+            NMI_n       => '1',
+            BUSRQ_n     => '1',
+            M1_n        => r8_m1_n,
+            MREQ_n      => r8_merq_n,
+            IORQ_n      => r8_iorq_n,
+            RD_n        => r8_rd_n,
+            WR_n        => r8_wr_n,
+            RFSH_n      => r8_rfsh_n,
+            HALT_n      => open,
+            BUSAK_n     => open,
+            A           => r8_adr,
+            DI          => dbi,
+            DO          => r8_dbo
+        );
+
+    r8_cen  <=  '0' when( r8_started = '0' )else
+                '0' when( s1990_r800 = '0' and r8_m1_n = '0' and r8_merq_n = '1' )else
+                '1';
+
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            r8_started  <= '0';
+            r8_sel_d    <= '0';
+            sw_gap      <= "00";
+            z80_hold    <= '0';
+            z80_resume  <= "0000";
+        elsif( clk21m'event and clk21m = '1' )then
+            if( s1990_r800 = '1' )then
+                r8_started <= '1';
+            end if;
+            r8_sel_d <= s1990_r800;
+            if( s1990_r800 /= r8_sel_d )then
+                sw_gap <= "10";
+            elsif( sw_gap /= "00" )then
+                sw_gap <= sw_gap - 1;
+            end if;
+            if( s1990_r800 = '1' )then
+                if( pSltMerq_n = '1' and pSltIorq_n = '1' )then
+                    z80_hold <= '1';
+                end if;
+                z80_resume <= "0000";
+            elsif( z80_hold = '1' )then
+                z80_hold   <= '0';
+                z80_resume <= "1100";                                   -- 12 x clk21m
+            elsif( z80_resume /= "0000" )then
+                z80_resume <= z80_resume - 1;
+            end if;
+        end if;
+    end process;
+
+    z_wait_n <= '0' when( z80_hold = '1' or z80_resume /= "0000" )else wait_n_s;
+
+    -- CPU bus seen by the internal bus registers, idle for 2 clocks on a switch
+    c_merq_n <= '1' when( sw_gap /= "00" )else r8_merq_n when( s1990_r800 = '1' )else pSltMerq_n;
+    c_iorq_n <= '1' when( sw_gap /= "00" )else r8_iorq_n when( s1990_r800 = '1' )else pSltIorq_n;
+    c_rd_n   <= '1' when( sw_gap /= "00" )else r8_rd_n   when( s1990_r800 = '1' )else pSltRd_n;
+    c_wr_n   <= '1' when( sw_gap /= "00" )else r8_wr_n   when( s1990_r800 = '1' )else pSltWr_n;
+    c_rfsh_n <= r8_rfsh_n   when( s1990_r800 = '1' )else CpuRfsh_n;
+    c_adr    <= r8_adr      when( s1990_r800 = '1' )else pSltAdr;
+    c_dat    <= r8_dbo      when( s1990_r800 = '1' )else pSltDat;
+
+    -- R800 bus cycle tracking
+    rc_rd   <=  '1' when( r8_merq_n = '0' and r8_rd_n = '0' )else '0';
+    rc_wr   <=  '1' when( r8_merq_n = '0' and r8_wr_n = '0' )else '0';
+    rc_io   <=  '1' when( r8_iorq_n = '0' and (r8_rd_n = '0' or r8_wr_n = '0') )else '0';
+
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            rc_req  <= '0';
+            rc_wram <= '0';
+            rc_cnt  <= (others => '0');
+        elsif( clk21m'event and clk21m = '1' )then
+            if( s1990_r800 = '0' or (rc_rd = '0' and rc_wr = '0' and rc_io = '0') )then
+                rc_req  <= '0';
+                rc_wram <= '0';
+                rc_cnt  <= (others => '0');
+            else
+                if( req = '1' )then
+                    rc_req <= '1';
+                end if;
+                if( w_wrt_req = '1' )then
+                    rc_wram <= '1';
+                end if;
+                if( rc_req = '1' and rc_cnt /= "111" )then
+                    rc_cnt <= rc_cnt + 1;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    rc_done <=  '0' when( rc_req = '0' or iack = '0' )else
+                '0' when( rc_rd = '1' and mem = '1' and jSltMem = '1' and jSltScc1 = '0' and jSltScc2 = '0' and
+                          not (sdr_rd_ok = '1' and sdr_rd_adr = CpuAdr) )else
+                '0' when( rc_wram = '1' and not (sdr_wr_ok = '1' and sdr_wr_adr = CpuAdr and sdr_wr_dat = dbo) )else
+                '0' when( (rc_io = '1' or (rc_rd = '1' and (jSltMem = '0' or jSltScc1 = '1' or jSltScc2 = '1'))) and rc_cnt < "011" )else
+                '1';
+
+    r8_wait_n <= '1' when( s1990_r800 = '0' )else                                         -- leaving: let it reach its next M1
+                 '0' when( (rc_rd = '1' or rc_wr = '1' or rc_io = '1') and rc_done = '0' )else
+                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' )else
+                 '1';
+
+    -- the MegaSD data port (4000-57FFh) and the V9968 ignore/overwrite an access that comes
+    -- while the previous one is running, the R800 is fast enough for that: hold the request
+    rc_mmcbusy <= s1990_r800 and mem and iSltErm and MmcEna and MmcAct when( adr(15 downto 13) = "010" and adr(12 downto 11) /= "11" )else '0';
+    rc_vdpbusy <= s1990_r800 and (not mem) and vdp_busy when( adr(7 downto 3) = "10011" )else '0';
 
     ----------------------------------------------------------------
     -- Port F2 (ESP8266 BIOS)
@@ -1937,9 +2118,11 @@ begin
     begin
         if( reset = '1' )then
             portF4_bit7 <= not LastRst_sta;
+            portF4_bit5 <= '0';
         elsif( clk21m'event and clk21m = '1' )then
             if( portF4_req = '1' and wrt = '1' )then
                 portF4_bit7 <= dbo(7);
+                portF4_bit5 <= dbo(5) and portF4_mode;
             end if;
         end if;
     end process;
@@ -1955,34 +2138,20 @@ begin
     -- the R800 is emulated by the T80 at 10.74MHz with MULU opcodes,
     -- the DRAM mode is only stored, the BIOS is always read from ROM
     --
-    -- CHGCPU switches Z80 > R800 with an OTIR of two bytes to E5h
-    -- (e.g. 40h, 60h): on a real turboR the 1st byte freezes the Z80
-    -- inside the OTIR and the 2nd one is only sent when the Z80 is
-    -- resumed. With a single CPU that 2nd byte (back to Z80) follows
-    -- at once, so it is dropped if it comes within ~12us
+    -- two CPUs like the real machine: the S1990 R#6 selects the running one,
+    -- the other is frozen with its state (see the R800 section)
     ----------------------------------------------------------------
     process( clk21m, reset )
     begin
         if( reset = '1' )then
             s1990_sel <= (others => '0');
             s1990_cpu <= "11";                                                          -- Z80, ROM mode
-            s1990_drop <= (others => '0');
         elsif( clk21m'event and clk21m = '1' )then
-            if( s1990_drop /= X"00" )then
-                s1990_drop <= s1990_drop - 1;
-            end if;
             if( s1990_req = '1' and wrt = '1' )then
                 if( adr(0) = '0' )then
                     s1990_sel <= dbo;
                 elsif( s1990_sel = X"06" )then
-                    if( s1990_drop /= X"00" and dbo(5) = '1' )then
-                        s1990_drop <= (others => '0');                                  -- frozen Z80 leftover, dropped
-                    else
-                        s1990_cpu <= dbo(6 downto 5);
-                        if( s1990_cpu(5) = '1' and dbo(5) = '0' )then
-                            s1990_drop <= (others => '1');                              -- Z80 > R800: 255 x 46.5ns
-                        end if;
-                    end if;
+                    s1990_cpu <= dbo(6 downto 5);
                 end if;
             end if;
         end if;
@@ -2609,6 +2778,38 @@ begin
         end if;
     end process;
 
+    -- CPU slot completion tracking (R800): row address at "000", column at "010",
+    -- the slot is valid for an address only if CpuAdr was the same at both points
+    process( memclk )
+    begin
+        if( memclk'event and memclk = '1' )then
+            if( ff_sdr_seq = "000" )then
+                sdr_slot_adr <= CpuAdr;
+            end if;
+            if( ff_sdr_seq = "010" )then
+                if( sdr_slot_adr = CpuAdr )then
+                    sdr_slot_ok <= '1';
+                else
+                    sdr_slot_ok <= '0';
+                end if;
+                if( SdrSta = "101" and RstSeq(4 downto 3) = "11" )then        -- write cpu
+                    if( sdr_slot_adr = CpuAdr )then
+                        sdr_wr_ok <= '1';
+                    else
+                        sdr_wr_ok <= '0';
+                    end if;
+                    sdr_wr_adr <= CpuAdr;
+                    sdr_wr_dat <= dbo;
+                    sdr_rd_ok  <= '0';
+                end if;
+            end if;
+            if( ff_sdr_seq = "101" and SdrSta = "100" )then                 -- read cpu
+                sdr_rd_adr <= sdr_slot_adr;
+                sdr_rd_ok  <= sdr_slot_ok;
+            end if;
+        end if;
+    end process;
+
     -- Data read latch for CPU
     process( memclk )
     begin
@@ -2718,9 +2919,9 @@ begin
     U01 : t80a
         port map(
             RESET_n     => (not reset),
-            R800_mode   => s1990_r800,          -- '0' => Z80 (no MULU), '1' => R800 selected by S1990 R#6 (MSXtR only)
+            R800_mode   => '0',                 -- the Z80 (the R800 is U01_R8)
             CLK_n       => iCpuClk,
-            WAIT_n      => wait_n_s,
+            WAIT_n      => z_wait_n,
             INT_n       => pSltInt_n,
             NMI_n       => '1',
             BUSRQ_n     => '1',
@@ -2839,7 +3040,7 @@ begin
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
                         VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
-                        vdp_wait_n_s);
+                        vdp_wait_n_s, vdp_busy);
 
     U21 : vencode
         port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,
