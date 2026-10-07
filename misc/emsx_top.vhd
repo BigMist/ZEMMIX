@@ -1133,6 +1133,7 @@ architecture RTL of emsx_top is
     signal  rc_mmcbusy      : std_logic;
     signal  rc_vdpbusy      : std_logic;
     signal  vdp_busy        : std_logic;
+    signal  r8_xwait_d      : std_logic;                                            -- external waits delayed by one clock (dlydbi)
     type    r8_cache_t      is array( 0 to 16383 ) of std_logic_vector( 19 downto 0 );    -- valid & tag(CpuAdr 24..14) & data
     signal  r8_cache        : r8_cache_t;                                           -- R800 read cache of the SDRAM
     signal  rc_q            : std_logic_vector( 19 downto 0 );
@@ -2135,10 +2136,21 @@ begin
                 '0' when( (rc_io = '1' or (rc_rd = '1' and (jSltMem = '0' or jSltScc1 = '1' or jSltScc2 = '1'))) and rc_cnt < "011" )else
                 '1';
 
+    -- a device that ends its wait on edge W gives its data in dlydbi on edge W+1: the R800
+    -- samples on the first edge with WAIT high, so the external waits last one clock more
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            r8_xwait_d <= '1';
+        elsif( clk21m'event and clk21m = '1' )then
+            r8_xwait_d <= pSltWait_n and esp_wait_s and vdp_wait_n_s;
+        end if;
+    end process;
+
     r8_wait_n <= '1' when( s1990_r800 = '0' )else                                         -- leaving: let it reach its next M1
                  '1' when( r8_hit = '1' )else                                             -- cache hit: no wait state
                  '0' when( (rc_rd = '1' or rc_wr = '1' or rc_io = '1') and rc_done = '0' )else
-                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' )else
+                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or r8_xwait_d = '0' )else
                  '1';
 
     -- the MegaSD data port (4000-57FFh) and the V9968 ignore/overwrite an access that comes
