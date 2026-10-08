@@ -44,6 +44,26 @@ id_ok:
         ld      a,1
         out     (OPLDAT),a
 
+        ; diagnostics of the ZEMMIX.ROM load done by the firmware (regs F0h-F3h, FAh-FFh)
+        ld      de,msg_rcv
+        call    print
+        ld      hl,regs_rcv
+        call    show3
+        ld      de,msg_lost
+        call    print
+        ld      hl,regs_lost
+        call    show3
+        ld      de,msg_wr
+        call    print
+        ld      hl,regs_wr
+        call    show3
+        ld      de,msg_flags
+        call    print
+        ld      a,0F3h
+        call    show_reg
+        ld      de,msg_crlf
+        call    print
+
         ; YRWLOAD V: verify only
         ld      hl,80h
         ld      b,(hl)
@@ -209,6 +229,24 @@ exit:
         jp      BDOS
 
 ; ------------------------------------------------------------------ helpers
+show3:                                  ; three regs from (hl), high byte first
+        ld      b,3
+show3_l:
+        push    bc
+        push    hl
+        ld      a,(hl)
+        call    show_reg
+        pop     hl
+        pop     bc
+        inc     hl
+        djnz    show3_l
+        ret
+
+show_reg:
+        out     (OPLIDX),a
+        in      a,(OPLDAT)
+        jp      hex8
+
 set_adr0:
         ld      a,3
         out     (OPLIDX),a
@@ -297,6 +335,13 @@ msg_first:  db  "First error at $"
 msg_ffile:  db  ": file $"
 msg_got:    db  ", memory $"
 msg_hex:    db  "0$"
+regs_rcv:   db  0FCh,0FBh,0FAh
+regs_lost:  db  0FFh,0FEh,0FDh
+regs_wr:    db  0F2h,0F1h,0F0h
+msg_rcv:    db  "Load: received $"
+msg_lost:   db  " lost $"
+msg_wr:     db  13,10,"      written $"
+msg_flags:  db  " flags $"
 handle:     db  0
 count:      db  0
 errors:     dw  0

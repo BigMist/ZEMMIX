@@ -741,6 +741,10 @@ architecture RTL of emsx_top is
             mem_rdat        : in    std_logic_vector( 15 downto 0 );
             pcm_l           : out   std_logic_vector( 15 downto 0 );
             pcm_r           : out   std_logic_vector( 15 downto 0 );
+            dbg_wr          : in    std_logic_vector( 23 downto 0 );
+            dbg_flags       : in    std_logic_vector(  7 downto 0 );
+            dbg_rcv         : in    std_logic_vector( 23 downto 0 );
+            dbg_lost        : in    std_logic_vector( 23 downto 0 );
             clk_eng         : in    std_logic
         );
     end component;
@@ -1124,6 +1128,10 @@ architecture RTL of emsx_top is
     signal  wt_rdat         : std_logic_vector( 15 downto 0 );
     signal  romload_rcv     : std_logic_vector( 23 downto 0 );
     signal  romload_lost    : std_logic_vector( 23 downto 0 );
+    signal  romload_wr      : std_logic_vector( 21 downto 0 );
+    signal  romload_wr24    : std_logic_vector( 23 downto 0 );
+    signal  romload_flags   : std_logic_vector(  7 downto 0 ) := (others => '0');   -- RstSeq at the start, a wave slot seen
+    signal  rom_dl_d        : std_logic := '0';
     -- OPL4 wave part (MoonSound)
     signal  opl4_cs         : std_logic;
     signal  opl4_a          : std_logic_vector(  2 downto 0 );
@@ -1569,7 +1577,8 @@ begin
                     else
                         HardRst_cnt <= "1001";                                          -- short click < 800ms (M51953BFP is not there)
                     end if;
-                elsif( w_10hz = '1' and HardRst_cnt /= "0001" )then                     -- timeout
+                elsif( w_10hz = '1' and HardRst_cnt /= "0001" and rom_dl_i = '0' )then   -- timeout (not during the ZEMMIX.ROM download:
+                                                                                        -- it keeps the reset for 1-2 s, a long click would restart RstSeq)
                     HardRst_cnt <= HardRst_cnt - 1;
                 end if;
             else
@@ -3555,6 +3564,10 @@ begin
                 mem_rdat    => wt_rdat,
                 pcm_l       => opl4_l,
                 pcm_r       => opl4_r,
+                dbg_wr      => romload_wr24,
+                dbg_flags   => romload_flags,
+                dbg_rcv     => romload_rcv,
+                dbg_lost    => romload_lost,
                 clk_eng     => clk_opl
             );
     end generate;
@@ -3567,6 +3580,22 @@ begin
         opl4_l      <= (others => '0');
         opl4_r      <= (others => '0');
     end generate;
+
+    romload_wr24 <= "00" & romload_wr;
+
+    -- diagnostics of the ZEMMIX.ROM load (regs F0h-F3h, FAh-FFh of 7Eh/7Fh):
+    -- RstSeq when the download starts (bits 7-3) and a wave slot seen during it (bit 0)
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            rom_dl_d <= rom_dl_i;
+            if( rom_dl_i = '1' and rom_dl_d = '0' )then
+                romload_flags <= RstSeq & "000";
+            elsif( rom_dl_i = '1' and wave_slot = '1' )then
+                romload_flags(0) <= '1';
+            end if;
+        end if;
+    end process;
 
     -- ZEMMIX.ROM (YRW801, sent by the firmware when the core starts) to 000000h of
     -- the wave memory, through a FIFO: the SDRAM may not be ready yet (ZEMMIX-0au.5)
@@ -3590,6 +3619,7 @@ begin
             m_rdat      => wave_rdat,
             rcv_cnt     => romload_rcv,
             lost_cnt    => romload_lost,
+            wr_adr      => romload_wr,
             loading     => open
         );
 

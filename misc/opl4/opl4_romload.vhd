@@ -50,6 +50,7 @@ entity opl4_romload is
 
         rcv_cnt     : out   std_logic_vector( 23 downto 0 );
         lost_cnt    : out   std_logic_vector( 23 downto 0 );
+        wr_adr      : out   std_logic_vector( 21 downto 0 );   -- next address to write (bytes written)
         loading     : out   std_logic                           -- download or FIFO not empty
     );
 end opl4_romload;
@@ -158,5 +159,6 @@ begin
 
     rcv_cnt  <= ff_rcv;
     lost_cnt <= ff_lost;
+    wr_adr   <= ff_ladr;
     loading  <= dl or not fifo_empty;
 end RTL;

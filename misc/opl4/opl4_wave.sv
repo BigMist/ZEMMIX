@@ -54,6 +54,12 @@ module opl4_wave
     output reg   [7:0] mem_wdat,
     input  wire [15:0] mem_rdat,
 
+    // diagnostics of the ZEMMIX.ROM load (clk_bus), read on regs F0h-F3h and FAh-FFh
+    input  wire [23:0] dbg_wr,                  // F0h-F2h: bytes written to the wave memory
+    input  wire  [7:0] dbg_flags,               // F3h
+    input  wire [23:0] dbg_rcv,                 // FAh-FCh: bytes received
+    input  wire [23:0] dbg_lost,                // FDh-FFh: bytes lost (FIFO full)
+
     // audio (clk_bus)
     output reg  signed [15:0] pcm_l,
     output reg  signed [15:0] pcm_r,
@@ -200,8 +206,23 @@ reg        rd_ok = 0;                          // the answer of this IN is on bu
 wire       rd_ready = rd_ok || rd_cnt >= RD_MAX;
 reg  [1:0] st_s0 = 2'b00;
 reg  [1:0] qb_s = 2'b00;                        // queue busy
+reg  [7:0] idx_b = 0;                           // last index written to 7Eh
+reg        wr4_d = 0;
+reg  [7:0] dbg_q;
+always @(*) begin
+    case (idx_b)
+        8'hF0: dbg_q = dbg_wr[7:0];    8'hF1: dbg_q = dbg_wr[15:8];   8'hF2: dbg_q = dbg_wr[23:16];
+        8'hF3: dbg_q = dbg_flags;
+        8'hFA: dbg_q = dbg_rcv[7:0];   8'hFB: dbg_q = dbg_rcv[15:8];  8'hFC: dbg_q = dbg_rcv[23:16];
+        8'hFD: dbg_q = dbg_lost[7:0];  8'hFE: dbg_q = dbg_lost[15:8]; 8'hFF: dbg_q = dbg_lost[23:16];
+        default: dbg_q = 8'h00;
+    endcase
+end
+wire       idx_dbg = (idx_b[7:4] == 4'hF) && (idx_b[3:2] == 2'b00 || idx_b[3:0] >= 4'hA);
 always @(posedge clk_bus) begin
     rdd_s  <= {rdd_s[1:0], rd_done_t};
+    wr4_d  <= bus_cs && !bus_wr_n && bus_a == 3'd4;
+    if (bus_cs && !bus_wr_n && bus_a == 3'd4 && !wr4_d) idx_b <= bus_di;
     rd7f_d <= rd7f;
     if (rd7f && !rd7f_d) rd_iss <= rd_iss + 1'd1;
     if (rd_back)         rd_cmp <= rd_cmp + 1'd1;
@@ -214,7 +235,7 @@ always @(posedge clk_bus) begin
     bus_status <= {st_s0[1], st_s0[0] | qb_s[1]};
 
     if (rd7f) begin
-        if (rd_back && rd_cmp + 1'd1 == rd_iss) bus_do <= rd_q;   // the answer of this IN
+        if (rd_back && rd_cmp + 1'd1 == rd_iss) bus_do <= idx_dbg ? dbg_q : rd_q;   // the answer of this IN (or a diagnostic byte)
     end
     else if (bus_rd_n) bus_do <= {6'b000000, bus_status};      // 7Eh: status (held during an IN)
 end
