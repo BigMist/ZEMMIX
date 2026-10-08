@@ -463,17 +463,32 @@ wire       msx_ps2_kbd_data = (ps2k_d == 1'b0 ? ps2k_d : 1'bZ);
 reg  [7:0] dipsw;
 wire [7:0] leds;
 
-reg reset;
-reg  [27:0] img_reset_cnt = 0;
+// Reset as in mist-devel/MSX_MiST 4d2e241 (cold boot with a black HDMI screen on the
+// SiDi128: its IT6613 is set up by the ARM over I2C after the power on):
+//  * power on: reset for a fixed 3.1 s after the PLL lock (HDMI set up, image mounted,
+//    RstSeq done); a PLL glitch starts it again
+//  * OSD / button reset: a 98 ms pulse (the HDMI is set up already)
+//  * img_mounted: no reset (sd_card.v takes the new image; the ARM sends it more than
+//    once, a reset on it caused trouble)
+//  * the ZEMMIX.ROM download (rom_dl) and the cartridge reset (BUS_nRESET) as before
+reg  [25:0] pw_cnt = 26'h3FFFFFF;               // 2^26 / 21.48 MHz = 3.1 s
+reg  [20:0] settle = 21'd0;                     // 2^21 / 21.48 MHz = 98 ms
+reg reset = 1'b1;
 `ifdef USE_EXTBUS	
-wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked | !BUS_nRESET | rom_dl;
+wire resetW = ~locked | pw_cnt != 26'd0 | settle != 21'd0 | !BUS_nRESET | rom_dl;
 `else
-wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked | rom_dl;
+wire resetW = ~locked | pw_cnt != 26'd0 | settle != 21'd0 | rom_dl;
 `endif
 
 always @(posedge clk_sys) begin
-	if (img_reset_cnt != 0) img_reset_cnt <= img_reset_cnt - 1'd1;
-	if (img_mounted | status[0]) img_reset_cnt <= 28'h2000000;
+	if (~locked) begin
+		pw_cnt <= 26'h3FFFFFF;
+		settle <= 21'd0;
+	end else begin
+		if (pw_cnt != 26'd0) pw_cnt <= pw_cnt - 26'd1;
+		if (settle != 21'd0) settle <= settle - 21'd1;
+	end
+	if (status[0] | buttons[1]) settle <= 21'h1FFFFF;
 	reset <= resetW;
 	dipsw <= {~status[8], ~status[7], ~status[6:5], ~status[4], ~status[3],1'b0 , ~status[1]};
 end
