@@ -8,6 +8,9 @@
 --   is configured, at 1-2 MB/s) and are written in
 --   order from address 000000h. ioctl_addr is not used, data_io sends the file
 --   from its start.
+--   The firmware keeps the MSX in reset while it sends the file: the SDRAM sequencer
+--   runs on in reset (the VDP dot clock is stopped then) and gives its slots to the
+--   loader (ZEMMIX-0au.5; before, only the first 64 KB, the FIFO, were written).
 --
 --   Between the wave memory client (c_*: the 7Eh/7Fh test, later the PCM engine)
 --   and the SDRAM port (m_*): the loader goes first, the client waits.

@@ -2822,6 +2822,8 @@ begin
                     SdrSta <= "0" & RstSeq(1 downto 0);
                 elsif( RstSeq(4 downto 3) /= "11" )then
                     SdrSta <= "101";                                                -- Write (Initialize memory content)
+                elsif( reset = '1' and wave_pend = '0' )then
+                    SdrSta <= "010";                                                -- MSX reset (VDP stopped): refresh, the slot is the OPL4's if it needs it
                 elsif( iSltRfsh_n = '0' and VideoDLClk = '1' )then
                     SdrSta <= "010";                                                -- refresh
                 else
@@ -2855,7 +2857,7 @@ begin
     wave_pend <= wave_req_t xor wave_done_t;
     -- during RstSeq (after the mode set) every slot writes the same few addresses again
     -- and again: the ZEMMIX.ROM loader can take any of them for its writes
-    wave_go   <= wave_slot when( VideoDLClk = '0' or RstSeq(4 downto 3) /= "11" )else '0';
+    wave_go   <= wave_slot when( VideoDLClk = '0' or RstSeq(4 downto 3) /= "11" or reset = '1' )else '0';
     wave_sdr_adr <= "111" & wave_adr;
 
     process( memclk )
@@ -2871,6 +2873,8 @@ begin
                     wave_slot <= '1';
                 elsif( wave_pend = '1' and wave_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
                     wave_slot <= '1';                                       -- ZEMMIX.ROM load during RstSeq
+                elsif( wave_pend = '1' and reset = '1' and RstSeq(4 downto 3) = "11" )then
+                    wave_slot <= '1';                                       -- MSX reset: the firmware sends ZEMMIX.ROM with the MSX in reset
                 else
                     wave_slot <= '0';
                 end if;
@@ -3152,7 +3156,7 @@ begin
         if( memclk'event and memclk = '1' )then
             case ff_sdr_seq is
                 when "000" =>
-                    if( VideoDHClk = '1' or RstSeq(4 downto 3) /= "11" )then
+                    if( VideoDHClk = '1' or RstSeq(4 downto 3) /= "11" or reset = '1' )then    -- in reset the VDP dot clock is stopped
                         ff_sdr_seq <= "001";
                     end if;
                 when "111" =>
