@@ -2,7 +2,7 @@
 // srg320/Arcade-PsikyoSH2_MiSTer rtl/PSH2/YMF278B.sv (commit 1a1d3e6, 2026-07-31).
 // ZEMMIX: OPL4_CH_RAM / OPL4_REG_RAM with ram_block_type "AUTO" and Cyclone 10 LP
 // as intended family (M9K instead of the M10K of the Cyclone V), and the CYCLE1_NEXT
-// output (the next CE samples MDI) so that the wave memory glue can hold that CE, and
+// and STATUS outputs (the next CE samples MDI, {LD, BUSY}) for the glue, and
 // reg 03h takes 6 bits of address (A21-A16) as the real chip, and the memory address
 // moves as in openMSX: reg 06h is read / written at MEMADDR, then MEMADDR + 1 (the
 // read of reg 05h / 06h is a prefetch that does not move it).
@@ -46,7 +46,8 @@ module YMF278B
 	input      [ 2: 0] SND_EN,
 	input              MONO,
 
-	output             CYCLE1_NEXT    // ZEMMIX: the next CE is a CYCLE1_CE (MDI is sampled)
+	output             CYCLE1_NEXT,   // ZEMMIX: the next CE is a CYCLE1_CE (MDI is sampled)
+	output     [ 1: 0] STATUS         // ZEMMIX: {LD, BUSY} as read on A <> 5
 	
 `ifdef DEBUG
                       ,
@@ -968,6 +969,7 @@ module YMF278B
 	assign IRQ_N = 1;
 	
 	assign DO = A == 3'h5 ? REG_Q : OPL3_DO | {6'b000000,LD|LD2,BUSY|BUSY2};
+	assign STATUS = {LD|LD2, BUSY|BUSY2};
 	
 	assign OUT0_L = OPL3_OUT_C;
 	assign OUT0_R = OPL3_OUT_D;

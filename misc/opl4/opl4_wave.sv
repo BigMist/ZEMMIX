@@ -7,12 +7,16 @@
 //
 //   * bus: every access to C4h-C7h (A = 0-3) and 7Eh-7Fh (A = 4-5) goes to the engine,
 //     which follows NEW2 from the FM writes (bank 1 reg 05h) and clears LD2 when C4h
-//     is read. The strobes are synchronized to clk_eng, A and DI are stable by then.
-//   * reads of 7Fh: the engine counts 4 CE after the read (REG_Q is stable then, also when
-//     its CE was held for a memory access) and gives the data back with a toggle, about
-//     300 ns: in time for a Z80 at 3.58 MHz (it samples about 700 ns after RD). bus_wait_n
-//     is low until then, straight from the bus signals, for the faster cpus (RD_MAX at most).
-//     bus_status {LD, BUSY} is given for 7Eh and to be ORed into the C4h status.
+//     is read. The engine samples its bus on CE only, and the CE stops while it waits
+//     for the wave memory: the accesses are taken at 50 MHz into a queue and played to
+//     the engine with strobes of a few CE, one after the other, each one when the
+//     engine is not BUSY (as a cpu that polls the status), so none is lost.
+//   * reads of 7Fh: the queue gives the REG_Q of the engine back (toggle), and the IN
+//     gets the data of its own read (counts of reads started / answered). bus_wait_n
+//     is low until then, straight from the bus signals (RD_MAX at most); a Z80 at
+//     3.58 MHz that does not wait samples about 700 ns after RD.
+//     bus_status {LD, BUSY} (BUSY also while the queue is not empty) is given for 7Eh
+//     and to be ORed into the C4h status.
 //   * memory: the engine asks for a byte when a window starts and samples it at the
 //     next CYCLE1_CE, about 7 CE later, with no wait. The request crosses to clk_bus
 //     (toggle) and that CE is held while the data is not back: the fractional
@@ -26,7 +30,7 @@ module opl4_wave
 #(
     parameter          CE_INC  = 24'd10584,     // 33.8688 MHz / 50 MHz = 10584 / 15625
     parameter          CE_MOD  = 24'd15625,
-    parameter          RD_MAX  = 5'd30          // longest wait of an IN 7Fh in clk_bus cycles (1.4 us)
+    parameter          RD_MAX  = 7'd100         // longest wait of an IN 7Fh in clk_bus cycles (4.7 us)
 )
 (
     input  wire        clk_bus,
@@ -63,27 +67,6 @@ initial begin
     pcm_l = 0; pcm_r = 0;
 end
 
-//------------------------------------------------------------------ bus side: read of 7Fh (clk_bus)
-wire       rd7f = bus_cs && !bus_rd_n && bus_a == 3'd5;
-reg  [4:0] rd_cnt = 0;                         // clk_bus cycles since the start of the IN 7Fh
-reg        rd_ok = 0;                          // the data of this IN is on bus_do
-reg  [2:0] rdd_s = 0;                          // read done toggle from clk_eng
-reg        rd_done_t;                          // (clk_eng)
-reg  [7:0] rd_q;                               // (clk_eng, stable when the toggle is seen)
-wire       rd_ready = rd_ok || rd_cnt >= RD_MAX;
-always @(posedge clk_bus) begin
-    rdd_s <= {rdd_s[1:0], rd_done_t};
-    if (!rd7f) begin
-        rd_cnt <= 0;
-        rd_ok  <= 0;
-    end
-    else begin
-        if (!rd_ready) rd_cnt <= rd_cnt + 1'd1;
-        if (rdd_s[2] != rdd_s[1]) rd_ok <= 1;
-    end
-end
-assign bus_wait_n = ~(rd7f && !rd_ready);
-
 //------------------------------------------------------------------ engine reset / bus sync (clk_eng)
 reg  [1:0] rst_s = 2'b00;
 always @(posedge clk_eng) rst_s <= {rst_s[0], ~reset_bus};
@@ -96,7 +79,7 @@ always @(posedge clk_eng) begin
     cs_s  <= {cs_s[0], bus_cs};
     rd_s  <= {rd_s[0], bus_rd_n};
     wr_s  <= {wr_s[0], bus_wr_n};
-    a_s0  <= bus_a;  a_s  <= a_s0;
+    a_s0  <= bus_a;  a_s  <= a_s0;              // stable when the strobes are seen
     di_s0 <= bus_di; di_s <= di_s0;
 end
 
@@ -110,8 +93,64 @@ always @(posedge clk_eng) begin
     else if (acc < 24'hF00000)  acc <= acc + CE_INC;            // credit while held
 end
 
+//------------------------------------------------------------------ queue of bus accesses (clk_eng)
+wire        rdx = cs_s[1] & ~rd_s[1];
+wire        wrx = cs_s[1] & ~wr_s[1];
+reg         rdx_d = 0, wrx_d = 0;
+reg  [11:0] q [0:7];                            // {read, A, DI}
+reg   [2:0] q_wp = 0, q_rp = 0;
+wire        q_empty = (q_wp == q_rp);
+always @(posedge clk_eng) begin
+    rdx_d <= rdx;
+    wrx_d <= wrx;
+    if (wrx && !wrx_d) begin
+        q[q_wp] <= {1'b0, a_s, di_s};
+        q_wp    <= q_wp + 1'd1;
+    end
+    else if (rdx && !rdx_d) begin
+        q[q_wp] <= {1'b1, a_s, 8'h00};
+        q_wp    <= q_wp + 1'd1;
+    end
+end
+
+// player: CS, then the strobe low for 2 CE and high again, the next one 12 CE later
+// and when the engine is not BUSY. A read of A = 5 takes REG_Q 5 CE after its strobe.
+wire  [7:0] eng_do;
+wire  [1:0] eng_status;
+reg         drv = 0;
+reg   [3:0] ph = 0;
+reg         drv_rd = 0, drv_cs = 0, drv_rd_n = 1, drv_wr_n = 1;
+reg   [2:0] drv_a = 0;
+reg   [7:0] drv_di = 0;
+reg         rd_done_t = 0;                      // to clk_bus, rd_q stable then
+reg   [7:0] rd_q = 8'hFF;
+always @(posedge clk_eng) begin
+    if (!drv) begin
+        if (!q_empty && !eng_status[0]) begin
+            {drv_rd, drv_a, drv_di} <= q[q_rp];
+            q_rp   <= q_rp + 1'd1;
+            drv    <= 1;
+            drv_cs <= 1;
+            ph     <= 0;
+        end
+    end
+    else if (ce) begin
+        ph <= ph + 1'd1;
+        case (ph)
+            4'd0:  if (drv_rd) drv_rd_n <= 0; else drv_wr_n <= 0;
+            4'd2:  begin drv_rd_n <= 1; drv_wr_n <= 1; end
+            4'd7:  if (drv_rd && drv_a == 3'd5) begin
+                       rd_q      <= eng_do;
+                       rd_done_t <= ~rd_done_t;
+                   end
+            4'd11: begin drv_cs <= 0; drv <= 0; end
+            default: ;
+        endcase
+    end
+end
+
 //------------------------------------------------------------------ engine
-wire  [7:0] eng_do, eng_mdo;
+wire  [7:0] eng_mdo;
 wire [20:0] eng_ma;
 wire        eng_mrd_n, eng_mwr_n;
 wire  [9:0] eng_mcs_n;
@@ -124,12 +163,12 @@ YMF278B ymf
     .RST_N      (eng_rst_n),
     .EN         (1'b1),
     .CE         (ce),
-    .A          (a_s),
-    .DI         (di_s),
+    .A          (drv_a),
+    .DI         (drv_di),
     .DO         (eng_do),
-    .RD_N       (rd_s[1]),
-    .WR_N       (wr_s[1]),
-    .CS_N       (~cs_s[1]),
+    .RD_N       (drv_rd_n),
+    .WR_N       (drv_wr_n),
+    .CS_N       (~drv_cs),
     .IC_N       (eng_rst_n),
     .IRQ_N      (),
     .MA         (eng_ma),
@@ -146,8 +185,38 @@ YMF278B ymf
     .OUT2_R     (out2_r),
     .SND_EN     (3'b111),
     .MONO       (1'b0),
-    .CYCLE1_NEXT(cycle1_next)
+    .CYCLE1_NEXT(cycle1_next),
+    .STATUS     (eng_status)
 );
+
+//------------------------------------------------------------------ bus side: reads of 7Fh, status (clk_bus)
+wire       rd7f = bus_cs && !bus_rd_n && bus_a == 3'd5;
+reg        rd7f_d = 0;
+reg  [2:0] rd_iss = 0, rd_cmp = 0;              // reads of 7Fh started / answered (mod 8)
+reg  [6:0] rd_cnt = 0;
+reg  [2:0] rdd_s = 0;
+wire       rd_back = rdd_s[2] != rdd_s[1];      // an answer
+wire       rd_ready = (rd7f_d && rd_cmp == rd_iss) || rd_cnt >= RD_MAX;
+reg  [1:0] st_s0 = 2'b00;
+reg  [1:0] qb_s = 2'b00;                        // queue busy
+always @(posedge clk_bus) begin
+    rdd_s  <= {rdd_s[1:0], rd_done_t};
+    rd7f_d <= rd7f;
+    if (rd7f && !rd7f_d) rd_iss <= rd_iss + 1'd1;
+    if (rd_back)         rd_cmp <= rd_cmp + 1'd1;
+    if (!rd7f)           rd_cnt <= 0;
+    else if (!rd_ready)  rd_cnt <= rd_cnt + 1'd1;
+
+    st_s0 <= eng_status;
+    qb_s  <= {qb_s[0], drv | !q_empty};
+    bus_status <= {st_s0[1], st_s0[0] | qb_s[1]};
+
+    if (rd7f) begin
+        if (rd_back && rd_cmp + 1'd1 == rd_iss) bus_do <= rd_q;   // the answer of this IN
+    end
+    else if (bus_rd_n) bus_do <= {6'b000000, bus_status};      // 7Eh: status (held during an IN)
+end
+assign bus_wait_n = ~(rd7f && !rd_ready);
 
 //------------------------------------------------------------------ wave memory, clk_eng side
 wire [21:0] eng_adr  = {~eng_mcs_n[1], eng_ma};    // MCS_N[1] is low when A21 = 1
@@ -230,41 +299,6 @@ always @(posedge clk_bus) begin
         b_done_t <= req_s[2];
         b_busy   <= 0;
     end
-end
-
-//------------------------------------------------------------------ status, read data (to clk_bus)
-reg  [1:0] st_e = 2'b00;
-reg  [1:0] st_s0 = 2'b00;
-// read of A = 5 (7Fh): 4 CE after it REG_Q is the data
-reg  [2:0] rd_ce = 0;
-reg        rd_busy = 0;
-reg        rd_s_d = 1;
-initial begin rd_done_t = 0; rd_q = 8'hFF; end
-always @(posedge clk_eng) begin
-    rd_s_d <= rd_s[1];
-    if (!rd_s[1] && rd_s_d && cs_s[1] && a_s == 3'd5) begin
-        rd_busy <= 1;
-        rd_ce   <= 0;
-    end
-    else if (rd_busy && ce) begin
-        if (rd_ce == 3'd4) begin
-            rd_q      <= eng_do;
-            rd_done_t <= ~rd_done_t;
-            rd_busy   <= 0;
-        end
-        else rd_ce <= rd_ce + 1'd1;
-    end
-end
-
-always @(posedge clk_eng) begin
-    if (a_s != 3'd5) st_e <= eng_do[1:0];      // DO is the status for A <> 5: {LD, BUSY}
-end
-always @(posedge clk_bus) begin
-    st_s0 <= st_e;  bus_status <= st_s0;
-    if (rd7f) begin
-        if (rdd_s[2] != rdd_s[1]) bus_do <= rd_q;     // 7Fh: the data, then held until the end of the IN
-    end
-    else if (bus_rd_n) bus_do <= {6'b000000, bus_status};  // 7Eh: status (held during an IN)
 end
 
 //------------------------------------------------------------------ audio (to clk_bus)

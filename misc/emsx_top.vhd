@@ -2842,10 +2842,12 @@ begin
     -- OPL4 wave memory (ZEMMIX-0au.4): 4 MB at the top of the 32 MB SDRAM (CpuAdr
     -- 1C00000-1FFFFFF, not used by the memory map), served in the cpu slots the cpu
     -- does not need. The Z80 does not wait for the SDRAM (it takes RamDbi at a fixed
-    -- time), so a slot is taken only out of its memory cycles: the worst delay of a
-    -- cpu access grows by about 2 memclk. The R800 waits for its own slot (rc_done,
-    -- sdr_rd_ok / sdr_wr_ok), so under the R800 a request waiting for 3 cpu slots
-    -- takes the next one anyway (not on the MegaSD, which acks on the SDRAM slot).
+    -- time), so a slot is taken only when there is no SDRAM request (RamReq = 0; req
+    -- drops after the first RamAck, so an access uses one or two slots): the worst
+    -- delay of a cpu access grows by about 2 memclk (decided at "111", not "001").
+    -- The R800 waits for its own slot (rc_done, sdr_rd_ok / sdr_wr_ok), so under the
+    -- R800 a request waiting for 3 cpu slots takes the next one anyway (not on the
+    -- MegaSD, which acks on the SDRAM slot).
     -- A wave slot does not touch RamDbi nor the R800 slot tracking, and RamAck waits
     -- for a real cpu slot (iack drops req: a cpu write acked in a wave slot is lost).
     wave_pend <= wave_req_t xor wave_done_t;
@@ -2859,7 +2861,7 @@ begin
                 -- DL = 0 it is the cpu slot, with DL = 1 the vdp slot. At "111" the previous dot
                 -- state is still there, DL = 1 before a cpu slot (as the refresh above)
                 if( wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '1' and iSltRfsh_n = '1' and
-                    ( (RamReq = '0' and iSltMerq_n = '1') or
+                    ( RamReq = '0' or
                       (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
                     wave_slot <= '1';
                 else
