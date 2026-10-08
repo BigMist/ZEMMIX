@@ -3,7 +3,9 @@
 --   Loads the YRW801 (ZEMMIX.ROM, 2 MB) into the OPL4 wave memory (ZEMMIX-0au.5).
 --   The MiST firmware sends <core>.ROM through data_io index 0 when the core
 --   starts, with no flow control, while the SDRAM may not be ready yet (the OCM
---   RstSeq takes about 24 ms): the bytes go through a FIFO and are written in
+--   RstSeq takes about 24 ms, the loader can write from RstSeq = 8 on, in any slot):
+--   the bytes go through a 64 KB FIFO (the firmware starts a few ms after the FPGA
+--   is configured, at 1-2 MB/s) and are written in
 --   order from address 000000h. ioctl_addr is not used, data_io sends the file
 --   from its start.
 --
@@ -20,7 +22,7 @@ library ieee;
 
 entity opl4_romload is
     generic(
-        FIFO_AW     : integer := 12                             -- 4096 bytes
+        FIFO_AW     : integer := 16                             -- 65536 bytes (see above)
     );
     port(
         clk21m      : in    std_logic;

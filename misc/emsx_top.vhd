@@ -1110,6 +1110,7 @@ architecture RTL of emsx_top is
     signal  wave_sdr_adr    : std_logic_vector( 24 downto 0 );
     signal  wave_pend       : std_logic;
     signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
+    signal  wave_go         : std_logic;                                             -- wave_slot for this slot (cpu slot, or any during RstSeq)
     signal  sdr_wr_a0       : std_logic := '0';                                     -- byte of the cpu / wave write (taken at "001")
     signal  CpuAdr_r        : std_logic_vector( 24 downto 0 ) := (others => '0');   -- CpuAdr registered in memclk (ZEMMIX-dl0)
     signal  wave_wait       : std_logic_vector(  1 downto 0 ) := "00";               -- cpu slots waited (R800)
@@ -2852,6 +2853,9 @@ begin
     -- A wave slot does not touch RamDbi nor the R800 slot tracking, and RamAck waits
     -- for a real cpu slot (iack drops req: a cpu write acked in a wave slot is lost).
     wave_pend <= wave_req_t xor wave_done_t;
+    -- during RstSeq (after the mode set) every slot writes the same few addresses again
+    -- and again: the ZEMMIX.ROM loader can take any of them for its writes
+    wave_go   <= wave_slot when( VideoDLClk = '0' or RstSeq(4 downto 3) /= "11" )else '0';
     wave_sdr_adr <= "111" & wave_adr;
 
     process( memclk )
@@ -2865,6 +2869,8 @@ begin
                     ( RamReq = '0' or
                       (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
                     wave_slot <= '1';
+                elsif( wave_pend = '1' and wave_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
+                    wave_slot <= '1';                                       -- ZEMMIX.ROM load during RstSeq
                 else
                     wave_slot <= '0';
                 end if;
@@ -2942,11 +2948,14 @@ begin
                             SdrUdq <= '0';
                             SdrLdq <= '0';
                         else
-                            if( RstSeq(4 downto 3) /= "11" )then
+                            if( wave_go = '1' )then
+                                SdrUdq <= not sdr_wr_a0;                -- OPL4 wave write (also during RstSeq)
+                                SdrLdq <= sdr_wr_a0;
+                            elsif( RstSeq(4 downto 3) /= "11" )then
                                 SdrUdq <= '0';
                                 SdrLdq <= '0';
                             elsif( VideoDLClk = '0' )then
-                                SdrUdq <= not sdr_wr_a0;                -- cpu or OPL4 wave write
+                                SdrUdq <= not sdr_wr_a0;                -- cpu write
                                 SdrLdq <= sdr_wr_a0;
                             else
                                 SdrUdq <= not VdpAdr(16);
@@ -2983,12 +2992,12 @@ begin
                         SdrAdr <= "00" & "010" & "0" & "010" & "0" & "000";
                         SdrBa  <= "00";                                             -- bank A
                     else                                                            -- set [row address]
-                        if( RstSeq(4 downto 2) = "011" and warmRESET /= '1' )then
-                            SdrAdr <= (others => '0');                              -- clear "AB" mark (ESE-SCC2 >> ESE-SCC1 >> ESE-RAM)
-                            SdrBa  <= "1" & RstSeq(1);                              -- bank C+D
-                        elsif( VideoDLClk = '0' and wave_slot = '1' )then
+                        if( wave_go = '1' )then
                             SdrAdr <= wave_sdr_adr(24 downto 23) & wave_sdr_adr(11 downto 1);   -- OPL4 wave memory
                             SdrBa  <= wave_sdr_adr(22 downto 21);
+                        elsif( RstSeq(4 downto 2) = "011" and warmRESET /= '1' )then
+                            SdrAdr <= (others => '0');                              -- clear "AB" mark (ESE-SCC2 >> ESE-SCC1 >> ESE-RAM)
+                            SdrBa  <= "1" & RstSeq(1);                              -- bank C+D
                         elsif( VideoDLClk = '0' )then
                             SdrAdr <= CpuAdr_r(24 downto 23) & CpuAdr_r(11 downto 1);   -- cpu read/write
                             SdrBa  <= CpuAdr_r(22 downto 21);                         -- bank A+B+C+D
@@ -3001,15 +3010,15 @@ begin
                     SdrAdr(10 downto 9) <= "10";                                                            -- A10=1 => enable auto precharge
                     -- when A10=1, SdrBa is ignored and all banks are selected
                     -- be careful not to assign SdrBa during auto precharge, otherwise it will cause instability
-                    if( RstSeq(4 downto 1) = "0110" and warmRESET /= '1' )then
+                    if( wave_go = '1' )then
+                        SdrAdr(12 downto 11) <= wave_sdr_adr(24 downto 23);
+                        SdrAdr(8 downto 0) <= wave_sdr_adr(20 downto 12);                                   -- OPL4 wave memory
+                    elsif( RstSeq(4 downto 1) = "0110" and warmRESET /= '1' )then
                         SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
                         SdrAdr(8 downto 0) <= RstSeq(0) & "00000000";                                       -- clear ESE-SCC2 >> ESE-SCC1
                     elsif( RstSeq(4 downto 1) = "0111" and warmRESET /= '1' )then
                         SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
                         SdrAdr(8 downto 0) <= (others => '0');                                              -- clear ESE-RAM
-                    elsif( VideoDLClk = '0' and wave_slot = '1' )then
-                        SdrAdr(12 downto 11) <= wave_sdr_adr(24 downto 23);
-                        SdrAdr(8 downto 0) <= wave_sdr_adr(20 downto 12);                                   -- OPL4 wave memory
                     elsif( VideoDLClk = '0' )then
                         SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
                         SdrAdr(8 downto 0) <= CpuAdr_r(20 downto 12);                                         -- cpu read/write
@@ -3056,10 +3065,10 @@ begin
                     if( SdrSta(0) = '0' )then
                         SdrDat <= (others => 'Z');
                     else
-                        if( RstSeq(4 downto 3) /= "11" )then
+                        if( wave_go = '1' )then
+                            SdrDat <= wave_wdat & wave_wdat;    -- OPL4 wave memory write (also during RstSeq)
+                        elsif( RstSeq(4 downto 3) /= "11" )then
                             SdrDat <= (others => '0');
-                        elsif( VideoDLClk = '0' and wave_slot = '1' )then
-                            SdrDat <= wave_wdat & wave_wdat;    -- OPL4 wave memory write
                         elsif( VideoDLClk = '0' )then
                             SdrDat <= dbo & dbo;                -- "101"(cpu write)
                         else
