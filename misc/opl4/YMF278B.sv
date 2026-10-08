@@ -1,7 +1,11 @@
 //license:BSD-3-Clause (PCM engine derived from MAME's ymf278b)
 // srg320/Arcade-PsikyoSH2_MiSTer rtl/PSH2/YMF278B.sv (commit 1a1d3e6, 2026-07-31).
 // ZEMMIX: OPL4_CH_RAM / OPL4_REG_RAM with ram_block_type "AUTO" and Cyclone 10 LP
-// as intended family (M9K instead of the M10K of the Cyclone V), nothing else.
+// as intended family (M9K instead of the M10K of the Cyclone V), and the CYCLE1_NEXT
+// output (the next CE samples MDI) so that the wave memory glue can hold that CE, and
+// reg 03h takes 6 bits of address (A21-A16) as the real chip, and the memory address
+// moves as in openMSX: reg 06h is read / written at MEMADDR, then MEMADDR + 1 (the
+// read of reg 05h / 06h is a prefetch that does not move it).
 
 // synopsys translate_off
 `define SIM
@@ -40,7 +44,9 @@ module YMF278B
 	output     [15: 0] OUT2_R,
 	
 	input      [ 2: 0] SND_EN,
-	input              MONO
+	input              MONO,
+
+	output             CYCLE1_NEXT    // ZEMMIX: the next CE is a CYCLE1_CE (MDI is sampled)
 	
 `ifdef DEBUG
                       ,
@@ -117,6 +123,7 @@ module YMF278B
 	
 	wire CYCLE0_CE = ~CYCLE_NUM[0] & CLK_DIV == 2'd3 & CE;
 	wire CYCLE1_CE =  CYCLE_NUM[0] & CLK_DIV == 2'd3 & CE;
+	assign CYCLE1_NEXT = CYCLE_NUM[0] & CLK_DIV == 2'd3;
 	wire SLOT0_CE = SLOT0_EN & CYCLE1_CE;
 	wire SLOT1_CE = SLOT1_EN & CYCLE1_CE;
 		
@@ -791,7 +798,7 @@ module YMF278B
 						8'h00: TEST0 <= REG_D;
 						8'h01: TEST1 <= REG_D;
 						8'h02: MEMMODE[4:0] <= REG_D[4:0];
-						8'h03: MEMADDR[21:16] <= REG_D[4:0];
+						8'h03: MEMADDR[21:16] <= REG_D[5:0];      // ZEMMIX: 6 bits (was [4:0]: no access to 200000h-3FFFFFh)
 						8'h04: MEMADDR[15:8] <= REG_D;
 						8'h05: MEMADDR[7:0] <= REG_D;
 						8'h06: MEMDAT <= REG_D; 
@@ -830,7 +837,7 @@ module YMF278B
 							8'hF9: REG_Q <= {2'b00,MIXPCM};
 							default: REG_Q <= '0;
 						endcase
-						if (REG_A == 8'h06) begin MEM_RREQ <= 1; BUSY2 <= 1; end
+						if (REG_A == 8'h06) begin MEM_RREQ <= 1; BUSY2 <= 1; MEMADDR <= MEMADDR + 22'd1; end  // ZEMMIX: next byte
 					end
 				end
 				
@@ -839,8 +846,12 @@ module YMF278B
 					if (MEM_RD && !MEMMODE[0]) begin
 						MEM_D <= MDI;
 					end
-					if ((MEM_RD || MEM_WR) && MEMMODE[0]) begin
+					// ZEMMIX: a read (after reg 05h, or after reading 06h) fetches MEMADDR into MEMDAT and
+					// does not move it, a write stores at MEMADDR and then increments it (openMSX)
+					if (MEM_RD && MEMMODE[0]) begin
 						MEMDAT <= MDI;
+					end
+					if (MEM_WR && MEMMODE[0]) begin
 						MEMADDR <= MEMADDR + 22'd1;
 					end
 					MEM_WR <= 0;

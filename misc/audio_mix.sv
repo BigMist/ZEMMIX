@@ -16,6 +16,8 @@ module audio_mix (
 
     input  wire signed [15:0] opl3_l,
     input  wire signed [15:0] opl3_r,
+    input  wire signed [15:0] opl4_l,               // OPL4 wave (PCM of the MoonSound), follows OpllVol
+    input  wire signed [15:0] opl4_r,
     input  wire signed [15:0] opll,
     input  wire signed [14:0] scc1_l,
     input  wire signed [14:0] scc1_r,
@@ -93,6 +95,7 @@ module audio_mix (
 
     reg signed [17:0] s_psg;
     reg signed [15:0] s_pcm, s_opll, s_opl3l, s_opl3r;
+    reg signed [15:0] s_opl4l, s_opl4r;
     reg signed [15:0] s_sccl, s_sccr;
     reg        [ 5:0] g_psg, g_scc, g_opll;
     reg        [ 4:0] g_mstr;
@@ -102,6 +105,8 @@ module audio_mix (
         s_opll  <= opll;
         s_opl3l <= opl3_l;
         s_opl3r <= opl3_r;
+        s_opl4l <= opl4_l;
+        s_opl4r <= opl4_r;
         s_sccl  <= scc1_l + scc2_l;                 // 15-bit signed, sign extended to 16
         s_sccr  <= scc1_r + scc2_r;
         g_psg   <= src_gain(psg_vol);
@@ -116,23 +121,27 @@ module audio_mix (
     wire signed [22:0] p_opll  = s_opll  * $signed({1'b0, g_opll});
     wire signed [22:0] p_opl3l = s_opl3l * $signed({1'b0, g_opll});
     wire signed [22:0] p_opl3r = s_opl3r * $signed({1'b0, g_opll});
+    wire signed [22:0] p_opl4l = s_opl4l * $signed({1'b0, g_opll});
+    wire signed [22:0] p_opl4r = s_opl4r * $signed({1'b0, g_opll});
     wire signed [22:0] p_sccl  = s_sccl  * $signed({1'b0, g_scc });
     wire signed [22:0] p_sccr  = s_sccr  * $signed({1'b0, g_scc });
 
-    reg signed [19:0] v_psg, v_pcm, v_opll, v_opl3l, v_opl3r, v_sccl, v_sccr;
+    reg signed [19:0] v_psg, v_pcm, v_opll, v_opl3l, v_opl3r, v_opl4l, v_opl4r, v_sccl, v_sccr;
     always @(posedge clk) begin
         v_psg   <= p_psg   >>> 4;
         v_pcm   <= p_pcm   >>> 4;
         v_opll  <= p_opll  >>> 4;
         v_opl3l <= p_opl3l >>> 4;
         v_opl3r <= p_opl3r >>> 4;
+        v_opl4l <= p_opl4l >>> 4;
+        v_opl4r <= p_opl4r >>> 4;
         v_sccl  <= p_sccl  >>> 4;
         v_sccr  <= p_sccr  >>> 4;
     end
 
     // ---- stage 3: sum with headroom and saturation to 16 bits
-    wire signed [22:0] sum_l = v_opl3l + v_opll + v_sccl + v_psg + v_pcm;
-    wire signed [22:0] sum_r = v_opl3r + v_opll + v_sccr + v_psg + v_pcm;
+    wire signed [22:0] sum_l = v_opl3l + v_opl4l + v_opll + v_sccl + v_psg + v_pcm;
+    wire signed [22:0] sum_r = v_opl3r + v_opl4r + v_opll + v_sccr + v_psg + v_pcm;
 
     function automatic signed [15:0] sat16(input signed [22:0] x);
         if (x > 23'sd32767)         sat16 = 16'sh7FFF;

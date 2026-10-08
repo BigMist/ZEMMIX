@@ -2,7 +2,7 @@
 ; through the memory registers on ports 7Eh/7Fh (opl4_memtest, ZEMMIX-0au.4),
 ; then reads it back and compares it with the file. MSX-DOS 2 / Nextor.
 ; YRWLOAD V only compares (the firmware loads ZEMMIX.ROM when the core starts).
-; It also shows the counters of that load (regs FAh-FFh of the 7Eh/7Fh test).
+; With the real OPL4 the ROM area is read only: YRWLOAD V is the useful mode.
 
 BDOS    equ     5
 _STROUT equ     09h
@@ -23,6 +23,11 @@ CHUNK   equ     4000h           ; 16 KB, 128 chunks = 2 MB
         ld      de,msg_hello
         call    print
 
+        ; NEW2 first: the wave registers of the OPL4 answer only with it
+        ld      a,5
+        out     (0C6h),a
+        ld      a,3
+        out     (0C7h),a
         ; ID check
         ld      a,2
         out     (OPLIDX),a
@@ -38,26 +43,6 @@ id_ok:
         out     (OPLIDX),a
         ld      a,1
         out     (OPLDAT),a
-
-        ; counters of the ZEMMIX.ROM load done by the firmware
-        ld      de,msg_rcv
-        call    print
-        ld      a,0FCh
-        call    show_reg
-        ld      a,0FBh
-        call    show_reg
-        ld      a,0FAh
-        call    show_reg
-        ld      de,msg_lost
-        call    print
-        ld      a,0FFh
-        call    show_reg
-        ld      a,0FEh
-        call    show_reg
-        ld      a,0FDh
-        call    show_reg
-        ld      de,msg_crlf
-        call    print
 
         ; YRWLOAD V: verify only
         ld      hl,80h
@@ -168,11 +153,6 @@ exit:
         jp      BDOS
 
 ; ------------------------------------------------------------------ helpers
-show_reg:
-        out     (OPLIDX),a
-        in      a,(OPLDAT)
-        jp      hex8
-
 set_adr0:
         ld      a,3
         out     (OPLIDX),a
@@ -256,8 +236,6 @@ msg_verify: db  13,10,"Verifying",13,10,"$"
 msg_errors: db  13,10,"Errors (bytes, hex): $"
 msg_file:   db  13,10,"Cannot read YRW801.ROM (2 MB)",13,10,"$"
 msg_dot:    db  ".$"
-msg_rcv:    db  "ZEMMIX.ROM load: received $"
-msg_lost:   db  " lost $"
 msg_crlf:   db  13,10,"$"
 msg_hex:    db  "0$"
 handle:     db  0

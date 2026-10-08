@@ -51,7 +51,7 @@ entity emsx_top is
         use_midi_g      : boolean   := true;
         use_opl3_g      : boolean   := true;
         opl3_fpga_g     : boolean   := false;                           -- OPL3: false = opl3sw (Next186), true = opl3_fpga (Greg Taylor, clk_opl = 50MHz)
-        opl4_memtest_g  : boolean   := false;                           -- OPL4 wave memory test on ports 7E-7Fh (ZEMMIX-0au.4, temporary)
+        use_opl4_g      : boolean   := false;                           -- OPL4 wave part (MoonSound: FM C4-C7h + wave 7E-7Fh), needs opl3_fpga_g and clk_opl = 50MHz
         use_dualpsg_g   : boolean   := true;
         psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
         opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz
@@ -179,6 +179,8 @@ entity emsx_top is
         vga_scanlines   : inout std_logic_vector(  1 downto 0 );
 		  opl3_l         : out std_logic_vector(15 downto 0 );
 		  opl3_r         : out std_logic_vector(15 downto 0 );
+		  opl4_l         : out std_logic_vector(15 downto 0 );         -- OPL4 wave (PCM)
+		  opl4_r         : out std_logic_vector(15 downto 0 );
 		  opll_o         : out std_logic_vector(15 downto 0 );
 		  scc1_l         : out std_logic_vector(14 downto 0 );
 		  scc1_r         : out std_logic_vector(14 downto 0 );
@@ -716,6 +718,30 @@ architecture RTL of emsx_top is
          );
     end component;
 
+    component opl4_wave is
+        port(
+            clk_bus         : in    std_logic;
+            reset_bus       : in    std_logic;
+            bus_cs          : in    std_logic;
+            bus_a           : in    std_logic_vector(  2 downto 0 );
+            bus_di          : in    std_logic_vector(  7 downto 0 );
+            bus_rd_n        : in    std_logic;
+            bus_wr_n        : in    std_logic;
+            bus_do          : out   std_logic_vector(  7 downto 0 );
+            bus_status      : out   std_logic_vector(  1 downto 0 );
+            bus_wait_n      : out   std_logic;
+            mem_req_t       : out   std_logic;
+            mem_done_t      : in    std_logic;
+            mem_we          : out   std_logic;
+            mem_adr         : out   std_logic_vector( 21 downto 0 );
+            mem_wdat        : out   std_logic_vector(  7 downto 0 );
+            mem_rdat        : in    std_logic_vector( 15 downto 0 );
+            pcm_l           : out   std_logic_vector( 15 downto 0 );
+            pcm_r           : out   std_logic_vector( 15 downto 0 );
+            clk_eng         : in    std_logic
+        );
+    end component;
+
     component opl3fpga_msx is
         generic(
             OPLCLK          : integer := 50000000                               -- opl_clk in Hz
@@ -1093,8 +1119,12 @@ architecture RTL of emsx_top is
     signal  wt_rdat         : std_logic_vector( 15 downto 0 );
     signal  romload_rcv     : std_logic_vector( 23 downto 0 );
     signal  romload_lost    : std_logic_vector( 23 downto 0 );
-    signal  wavetest_req    : std_logic;
-    signal  wavetest_dbi    : std_logic_vector(  7 downto 0 ) := (others => '1');
+    -- OPL4 wave part (MoonSound)
+    signal  opl4_cs         : std_logic;
+    signal  opl4_a          : std_logic_vector(  2 downto 0 );
+    signal  opl4_do         : std_logic_vector(  7 downto 0 ) := (others => '1');
+    signal  opl4_status     : std_logic_vector(  1 downto 0 ) := "00";
+    signal  opl4_wait_n     : std_logic := '1';
     signal  RamDbi          : std_logic_vector(  7 downto 0 );
     signal  CpuAdr          : std_logic_vector( 24 downto 0 );
 
@@ -1843,7 +1873,7 @@ begin
                 count := count - 1;
             end if;
 
-            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' )then
+            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' )then
                 wait_n_s <= '0';
             elsif( count /= "0000" )then
                 wait_n_s <= '0';
@@ -1935,8 +1965,8 @@ begin
                 dlydbi <= s1990_dbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "1010010" )then                                       -- turboR PCM device
                 dlydbi <= tr_pcm_dbi;
-            elsif( mem = '0' and adr(  7 downto 1 ) = "0111111" and opl4_memtest_g )then                   -- OPL4 wave memory test 7E-7Fh
-                dlydbi <= wavetest_dbi;
+            elsif( mem = '0' and adr(  7 downto 1 ) = "0111111" and opl3_enabled = '1' and use_opl4_g )then  -- OPL4 wave ports 7E-7Fh
+                dlydbi <= opl4_do;
             elsif( mem = '0' and adr(  7 downto 4 ) = "0100" and io40_n /= "11111111" )then                 -- Switched I/O ports
                 dlydbi <= swio_dbi;
             elsif( mem = '0' and adr(  7 downto 0 ) = "10100111" and portF4_mode = '1' )then                -- Pause R800 (read only)
@@ -1949,7 +1979,9 @@ begin
                 dlydbi <= portF4_bit7 & "1111111";
             elsif( mem = '0' and adr(  7 downto 1 ) = "0000011" and use_wifi_g )then                        -- ESP ports 06-07h
                 dlydbi <= esp_dout_s;
-            elsif( mem = '0' and adr(  7 downto 3 ) = "11000" and opl3_enabled = '1' )then                  -- OPL3 ports C0-C3h / C4-C7h
+            elsif( mem = '0' and adr(  7 downto 2 ) = "110001" and adr( 1 downto 0 ) = "00" and opl3_enabled = '1' and use_opl4_g )then  -- C4h status: OPL3 + {LD, BUSY} of the OPL4
+                dlydbi <= opl3_dout_s or ("000000" & opl4_status);
+            elsif( mem = '0' and adr(  7 downto 2 ) = "110001" and opl3_enabled = '1' )then                 -- OPL3 / MoonSound FM ports C4-C7h
                 dlydbi <= opl3_dout_s;
 --          elsif( mem = '0' and adr(  7 downto 1 ) = "0111110" and opl3_enabled = '1' )then                -- OPLL ports 7C-7Dh via OPL3
 --              dlydbi <= opl3_dout_s;
@@ -2235,7 +2267,7 @@ begin
         if( reset = '1' )then
             r8_xwait_d <= '1';
         elsif( clk21m'event and clk21m = '1' )then
-            r8_xwait_d <= pSltWait_n and esp_wait_s and vdp_wait_n_s;
+            r8_xwait_d <= pSltWait_n and esp_wait_s and vdp_wait_n_s and opl4_wait_n;
         end if;
     end process;
 
@@ -2243,7 +2275,7 @@ begin
                  '1' when( r8_hit = '1' )else                                             -- cache hit: no wait state
                  '0' when( (rc_rd = '1' or rc_wr = '1' or rc_io = '1') and rc_done = '0' )else
                  '0' when( r8_ext = '1' and r8_ext_cnt /= "111" )else                     -- external: as long as a Z80 access
-                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or r8_xwait_d = '0' )else
+                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' or r8_xwait_d = '0' )else
                  '1';
 
     -- R800 access to the cartridge slots (no internal device answers): the strobes last
@@ -2546,7 +2578,6 @@ begin
     portF2_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                             )else '0';  -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
     portF4_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110100"                                                )else '0';  -- I/O:F4h    / Port F4 device
     tr_pcm_req  <=  req when( mem = '0' and adr(7 downto 1) = "1010010"                                                 )else '0';  -- I/O:A4-A5h / turboR PCM device
-    wavetest_req <= req when( mem = '0' and adr(7 downto 1) = "0111111" and opl4_memtest_g                     )else '0';  -- I/O:7E-7Fh / OPL4 wave memory test
 
     BusDir  <=  '1' when( pSltAdr(7 downto 3) = "10011"                                         )else   -- I/O:98-9Fh / VDP (V9968)
                 '1' when( pSltAdr(7 downto 2) = "101000"                                        )else   -- I/O:A0-A3h / PSG (AY-3-8910)
@@ -2563,9 +2594,9 @@ begin
                 '1' when( pSltAdr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                   )else   -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
                 '1' when( pSltAdr(7 downto 0) = "11110100"                                      )else   -- I/O:F4h    / Port F4 device
                 '1' when( pSltAdr(7 downto 1) = "1010010"                                       )else   -- I/O:A4-A5h / turboR PCM device
-                '1' when( pSltAdr(7 downto 1) = "0111111" and opl4_memtest_g                    )else   -- I/O:7E-7Fh / OPL4 wave memory test
+                '1' when( pSltAdr(7 downto 1) = "0111111" and opl3_enabled = '1' and use_opl4_g    )else   -- I/O:7E-7Fh / OPL4 wave
                 '1' when( pSltAdr(7 downto 1) = "0000011" and use_wifi_g                        )else   -- I/O:06-07h / ESP
-                '1' when( pSltAdr(7 downto 3) = "11000" and opl3_enabled = '1'                  )else   -- I/O:C0-C7h / OPL3
+                '1' when( pSltAdr(7 downto 2) = "110001" and opl3_enabled = '1'                 )else   -- I/O:C4-C7h / OPL3 (MoonSound FM)
 --              '1' when( pSltAdr(7 downto 1) = "0111110" and opl3_enabled = '1'                )else   -- I/O:7C-7Dh / OPLL via OPL3
                 '1' when( pSltAdr(7 downto 0) = "11101001" and use_midi_g                       )else   -- I/O:E9h    / MIDI
                 '0';
@@ -3474,33 +3505,45 @@ begin
     -- turboR PCM sampler (microphone of the A1ST/GT): the 1-bit audio input (ear_i)
     tr_pcm_wave_in <= X"C0" when( ear_i = '1' )else X"40";
 
-    -- OPL4 wave memory test (ZEMMIX-0au.4): memory registers of the YMF278B on 7E-7Fh
-    wavetest_u : if opl4_memtest_g generate
-        u_wavetest : entity work.opl4_memtest
+    -- OPL4 wave part (MoonSound, ZEMMIX-0au.3 / .6): srg320's YMF278B on clk_opl, its
+    -- registers on 7E-7Fh, every C4-C7h access seen too (NEW2, LD2), wave memory in the SDRAM
+    opl4_a  <= "0" & adr(1 downto 0)    when( adr(7) = '1' )else       -- C4-C7h -> 0-3
+               "10" & adr(0);                                          -- 7E-7Fh -> 4-5
+    opl4_cs <= '1' when( iSltIorq_n = '0' and opl3_enabled = '1' and use_opl4_g and
+                         (adr(7 downto 2) = "110001" or adr(7 downto 1) = "0111111") )else '0';
+
+    opl4_u : if use_opl4_g generate
+        u_opl4 : opl4_wave
             port map(
-                clk21m      => clk21m,
-                reset       => reset,
-                req         => wavetest_req,
-                wrt         => wrt,
-                adr0        => adr(0),
-                dbi         => wavetest_dbi,
-                dbo         => dbo,
-                wave_req_t  => wt_req_t,
-                wave_done_t => wt_done_t,
-                wave_we     => wt_we,
-                wave_adr    => wt_adr,
-                wave_wdat   => wt_wdat,
-                wave_rdat   => wt_rdat,
-                dbg_rcv     => romload_rcv,
-                dbg_lost    => romload_lost
+                clk_bus     => clk21m,
+                reset_bus   => reset,
+                bus_cs      => opl4_cs,
+                bus_a       => opl4_a,
+                bus_di      => dbo,
+                bus_rd_n    => xSltRd_n,
+                bus_wr_n    => xSltWr_n,
+                bus_do      => opl4_do,
+                bus_status  => opl4_status,
+                bus_wait_n  => opl4_wait_n,
+                mem_req_t   => wt_req_t,
+                mem_done_t  => wt_done_t,
+                mem_we      => wt_we,
+                mem_adr     => wt_adr,
+                mem_wdat    => wt_wdat,
+                mem_rdat    => wt_rdat,
+                pcm_l       => opl4_l,
+                pcm_r       => opl4_r,
+                clk_eng     => clk_opl
             );
     end generate;
 
-    wavetest_off : if not opl4_memtest_g generate
+    opl4_off : if not use_opl4_g generate
         wt_req_t    <= '0';
         wt_we       <= '0';
         wt_adr      <= (others => '0');
         wt_wdat     <= (others => '0');
+        opl4_l      <= (others => '0');
+        opl4_r      <= (others => '0');
     end generate;
 
     -- ZEMMIX.ROM (YRW801, sent by the firmware when the core starts) to 000000h of
@@ -3609,7 +3652,7 @@ begin
         );
     end generate;
 
-    opl3_ce <= '1' when( adr(  7 downto 3 ) = "11000"   and iSltIorq_n = '0' and xSltWr_n = '0' and use_opl3_g )else    -- OPL3 ports C0-C3h / C4-C7h
+    opl3_ce <= '1' when( adr(  7 downto 2 ) = "110001"  and iSltIorq_n = '0' and xSltWr_n = '0' and use_opl3_g )else    -- OPL3 ports C4-C7h (MoonSound FM)
 --             '1' when( adr(  7 downto 1 ) = "0111110" and iSltIorq_n = '0' and xSltWr_n = '0' and use_opl3_g          -- OPLL ports 7C-7Dh via OPL3
                '0';
 

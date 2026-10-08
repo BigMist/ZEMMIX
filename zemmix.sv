@@ -558,7 +558,7 @@ emsx_top #(
     .use_midi_g(true),   // activar interfaz midi
     .use_opl3_g(true),  // false. cambiar a true para activar OPL3
     .opl3_fpga_g(OPL3_FPGA),
-    .opl4_memtest_g(true),  // OPL4 wave memory test on 7E-7Fh (ZEMMIX-0au.4, temporary)
+    .use_opl4_g(OPL3_FPGA),    // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
     .use_dualpsg_g(false),// activar doble chip PSG
     .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
     .opl3_clk_g(OPL3_CLK)
@@ -648,6 +648,8 @@ emsx_top #(
 		  .rom_dat_i   (ioctl_dout),
 		  .opl3_l      (opl3_l),
 		  .opl3_r      (opl3_r),
+		  .opl4_l      (opl4_l),
+		  .opl4_r      (opl4_r),
 		  .opll_o      (opll_o),
 		  .scc1_l      (scc1_l),
 		  .scc1_r      (scc1_r),
@@ -687,6 +689,7 @@ emsx_top #(
 reg signed [15:0] opll_o;
 reg signed [15:0] opl3_l;
 reg signed [15:0] opl3_r;
+wire        [15:0] opl4_l, opl4_r;
 reg signed [14:0] scc1_r;
 reg signed [14:0] scc1_l;
 reg signed [14:0] scc2_r;
@@ -713,6 +716,8 @@ audio_mix audio_mix
  .reset    (reset),
  .opl3_l   (opl3_l),
  .opl3_r   (opl3_r),
+ .opl4_l   (opl4_l),
+ .opl4_r   (opl4_r),
  .opll     (opll_o),
  .scc1_l   (scc1_l),
  .scc1_r   (scc1_r),

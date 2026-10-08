@@ -1,4 +1,4 @@
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "YMF278B_pkg.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "YMF278B.sv"]
-set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) "opl4_memtest.vhd"]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) "opl4_wave.sv"]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) "opl4_romload.vhd"]
