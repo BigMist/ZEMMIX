@@ -114,6 +114,25 @@ ver_cmp:
         jr      z,ver_same
         push    hl
         ld      hl,(errors)
+        ld      a,h
+        or      l
+        jr      nz,ver_next             ; not the first error
+        pop     hl                      ; first error: keep where and what
+        push    hl
+        push    de
+        ld      a,(de)
+        ld      (first_exp),a
+        ld      a,(hl)
+        ld      (first_got),a
+        ld      de,BUF1
+        or      a
+        sbc     hl,de
+        ld      (first_off),hl
+        ld      a,(count)
+        ld      (first_cnt),a
+        pop     de
+        ld      hl,(errors)
+ver_next:
         inc     hl
         ld      a,h
         or      l
@@ -140,6 +159,43 @@ ver_same:
         ld      a,(errors+1)
         call    hex8
         ld      a,(errors)
+        call    hex8
+        ld      de,msg_crlf
+        call    print
+        ld      hl,(errors)
+        ld      a,h
+        or      l
+        jr      z,exit
+        ld      de,msg_first            ; first error: address, file byte, wave memory byte
+        call    print
+        ld      a,(first_cnt)
+        ld      b,a
+        ld      a,128
+        sub     b                       ; chunk number 0-127 (16 KB each)
+        ld      b,a
+        rrca
+        rrca
+        and     3Fh
+        call    hex8                    ; address bits 23-16
+        ld      a,(first_cnt)           ; (hex8 calls the BDOS: B is gone)
+        ld      b,a
+        ld      a,128
+        sub     b
+        rrca
+        rrca
+        and     0C0h
+        ld      hl,first_off+1
+        or      (hl)
+        call    hex8                    ; bits 15-8
+        ld      a,(first_off)
+        call    hex8                    ; bits 7-0
+        ld      de,msg_ffile
+        call    print
+        ld      a,(first_exp)
+        call    hex8
+        ld      de,msg_got
+        call    print
+        ld      a,(first_got)
         call    hex8
         ld      de,msg_crlf
         call    print
@@ -237,7 +293,14 @@ msg_errors: db  13,10,"Errors (bytes, hex): $"
 msg_file:   db  13,10,"Cannot read YRW801.ROM (2 MB)",13,10,"$"
 msg_dot:    db  ".$"
 msg_crlf:   db  13,10,"$"
+msg_first:  db  "First error at $"
+msg_ffile:  db  ": file $"
+msg_got:    db  ", memory $"
 msg_hex:    db  "0$"
 handle:     db  0
 count:      db  0
 errors:     dw  0
+first_off:  dw  0
+first_cnt:  db  0
+first_exp:  db  0
+first_got:  db  0
