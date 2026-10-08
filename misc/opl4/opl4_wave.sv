@@ -106,16 +106,27 @@ reg         rdx_d = 0, wrx_d = 0;
 reg  [11:0] q [0:7];                            // {read, A, DI}
 reg   [2:0] q_wp = 0, q_rp = 0;
 wire        q_empty = (q_wp == q_rp);
+// A and DI are taken 3 clk_eng after the strobe is seen: DO and WR (or RD) can change in
+// the same clk21m cycle (R800), and a sample taken with the strobe could still have
+// bits of the old value
+reg   [1:0] x_cnt = 0;
+reg         x_rd = 0, x_pend = 0;
 always @(posedge clk_eng) begin
     rdx_d <= rdx;
     wrx_d <= wrx;
-    if (wrx && !wrx_d) begin
-        q[q_wp] <= {1'b0, a_s, di_s};
-        q_wp    <= q_wp + 1'd1;
+    if (x_pend) begin
+        if (x_cnt != 0) x_cnt <= x_cnt - 1'd1;
+        else begin
+            q[q_wp] <= {x_rd, a_s, x_rd ? 8'h00 : di_s};
+            q_wp    <= q_wp + 1'd1;
+            x_pend  <= 0;
+        end
+    end
+    else if (wrx && !wrx_d) begin
+        x_pend <= 1; x_rd <= 0; x_cnt <= 2'd2;
     end
     else if (rdx && !rdx_d) begin
-        q[q_wp] <= {1'b1, a_s, 8'h00};
-        q_wp    <= q_wp + 1'd1;
+        x_pend <= 1; x_rd <= 1; x_cnt <= 2'd2;
     end
 end
 
