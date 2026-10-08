@@ -558,6 +558,7 @@ emsx_top #(
     .use_midi_g(true),   // activar interfaz midi
     .use_opl3_g(true),  // false. cambiar a true para activar OPL3
     .opl3_fpga_g(OPL3_FPGA),
+    .opl4_memtest_g(true),  // OPL4 wave memory test on 7E-7Fh (ZEMMIX-0au.4, temporary)
     .use_dualpsg_g(false),// activar doble chip PSG
     .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
     .opl3_clk_g(OPL3_CLK)

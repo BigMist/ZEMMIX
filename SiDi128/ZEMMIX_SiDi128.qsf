@@ -428,6 +428,7 @@ set_global_assignment -name VERILOG_FILE "../ocm-pld-dev/ocm_sm/src_addons/perip
 set_global_assignment -name VERILOG_FILE "../ocm-pld-dev/ocm_sm/src_addons/peripheral/sm_eseps2.v"
 set_global_assignment -name QIP_FILE ../misc/opl3/opl3.qip
 set_global_assignment -name QIP_FILE ../misc/opl3fpga/opl3fpga.qip
+set_global_assignment -name QIP_FILE ../misc/opl4/opl4.qip
 set_global_assignment -name QIP_FILE ../misc/emsx.qip
 set_global_assignment -name QIP_FILE ../v9968/v9968.qip
 set_global_assignment -name VERILOG_FILE ../misc/StereoVolumeControl.v

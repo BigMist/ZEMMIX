@@ -51,6 +51,7 @@ entity emsx_top is
         use_midi_g      : boolean   := true;
         use_opl3_g      : boolean   := true;
         opl3_fpga_g     : boolean   := false;                           -- OPL3: false = opl3sw (Next186), true = opl3_fpga (Greg Taylor, clk_opl = 50MHz)
+        opl4_memtest_g  : boolean   := false;                           -- OPL4 wave memory test on ports 7E-7Fh (ZEMMIX-0au.4, temporary)
         use_dualpsg_g   : boolean   := true;
         psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
         opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz
@@ -1064,6 +1065,21 @@ architecture RTL of emsx_top is
     -- External memory signals
     signal  RamReq          : std_logic;
     signal  RamAck          : std_logic;
+
+    -- OPL4 wave memory in the SDRAM (cpu slots the cpu does not use)
+    signal  wave_req_t      : std_logic := '0';                                     -- request: toggles
+    signal  wave_done_t     : std_logic := '0';                                     -- done when equal to wave_req_t
+    signal  wave_we         : std_logic := '0';
+    signal  wave_adr        : std_logic_vector( 21 downto 0 ) := (others => '0');
+    signal  wave_wdat       : std_logic_vector(  7 downto 0 ) := (others => '0');
+    signal  wave_rdat       : std_logic_vector( 15 downto 0 ) := (others => '1');
+    signal  wave_sdr_adr    : std_logic_vector( 24 downto 0 );
+    signal  wave_pend       : std_logic;
+    signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
+    signal  sdr_wr_a0       : std_logic := '0';                                     -- byte of the cpu / wave write (taken at "001")
+    signal  wave_wait       : std_logic_vector(  1 downto 0 ) := "00";               -- cpu slots waited (R800)
+    signal  wavetest_req    : std_logic;
+    signal  wavetest_dbi    : std_logic_vector(  7 downto 0 ) := (others => '1');
     signal  RamDbi          : std_logic_vector(  7 downto 0 );
     signal  CpuAdr          : std_logic_vector( 24 downto 0 );
 
@@ -1904,6 +1920,8 @@ begin
                 dlydbi <= s1990_dbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "1010010" )then                                       -- turboR PCM device
                 dlydbi <= tr_pcm_dbi;
+            elsif( mem = '0' and adr(  7 downto 1 ) = "0111111" and opl4_memtest_g )then                   -- OPL4 wave memory test 7E-7Fh
+                dlydbi <= wavetest_dbi;
             elsif( mem = '0' and adr(  7 downto 4 ) = "0100" and io40_n /= "11111111" )then                 -- Switched I/O ports
                 dlydbi <= swio_dbi;
             elsif( mem = '0' and adr(  7 downto 0 ) = "10100111" and portF4_mode = '1' )then                -- Pause R800 (read only)
@@ -2513,6 +2531,7 @@ begin
     portF2_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                             )else '0';  -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
     portF4_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110100"                                                )else '0';  -- I/O:F4h    / Port F4 device
     tr_pcm_req  <=  req when( mem = '0' and adr(7 downto 1) = "1010010"                                                 )else '0';  -- I/O:A4-A5h / turboR PCM device
+    wavetest_req <= req when( mem = '0' and adr(7 downto 1) = "0111111" and opl4_memtest_g                     )else '0';  -- I/O:7E-7Fh / OPL4 wave memory test
 
     BusDir  <=  '1' when( pSltAdr(7 downto 3) = "10011"                                         )else   -- I/O:98-9Fh / VDP (V9968)
                 '1' when( pSltAdr(7 downto 2) = "101000"                                        )else   -- I/O:A0-A3h / PSG (AY-3-8910)
@@ -2529,6 +2548,7 @@ begin
                 '1' when( pSltAdr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                   )else   -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
                 '1' when( pSltAdr(7 downto 0) = "11110100"                                      )else   -- I/O:F4h    / Port F4 device
                 '1' when( pSltAdr(7 downto 1) = "1010010"                                       )else   -- I/O:A4-A5h / turboR PCM device
+                '1' when( pSltAdr(7 downto 1) = "0111111" and opl4_memtest_g                    )else   -- I/O:7E-7Fh / OPL4 wave memory test
                 '1' when( pSltAdr(7 downto 1) = "0000011" and use_wifi_g                        )else   -- I/O:06-07h / ESP
                 '1' when( pSltAdr(7 downto 3) = "11000" and opl3_enabled = '1'                  )else   -- I/O:C0-C7h / OPL3
 --              '1' when( pSltAdr(7 downto 1) = "0111110" and opl3_enabled = '1'                )else   -- I/O:7C-7Dh / OPLL via OPL3
@@ -2747,10 +2767,53 @@ begin
                 end if;
             elsif( ff_sdr_seq = "001" and SdrSta(2) = '1' and RstSeq(4 downto 3) = "11" )then
                 SdrSta(1) <= VideoDLClk;                                            -- 0:cpu, 1:vdp
-                if( VideoDLClk = '0' )then
+                if( VideoDLClk = '0' and wave_slot = '1' )then
+                    SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a free cpu slot)
+                elsif( VideoDLClk = '0' )then
                     SdrSta(0) <= w_wrt_req;         -- for cpu
                 else
                     SdrSta(0) <= not WeVdp_n;       -- for vdp
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- OPL4 wave memory (ZEMMIX-0au.4): 4 MB at the top of the 32 MB SDRAM (CpuAdr
+    -- 1C00000-1FFFFFF, not used by the memory map), served in the cpu slots the cpu
+    -- does not need. The Z80 does not wait for the SDRAM (it takes RamDbi at a fixed
+    -- time), so a slot is taken only out of its memory cycles: the worst delay of a
+    -- cpu access grows by about 2 memclk. The R800 waits for its own slot (rc_done,
+    -- sdr_rd_ok / sdr_wr_ok), so under the R800 a request waiting for 3 cpu slots
+    -- takes the next one anyway (not on the MegaSD, which acks on the SDRAM slot).
+    -- A wave slot does not touch RamDbi nor the R800 slot tracking, and RamAck waits
+    -- for a real cpu slot (iack drops req: a cpu write acked in a wave slot is lost).
+    wave_pend <= wave_req_t xor wave_done_t;
+    wave_sdr_adr <= "111" & wave_adr;
+
+    process( memclk )
+    begin
+        if( memclk'event and memclk = '1' )then
+            if( ff_sdr_seq = "111" )then
+                if( wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '0' and
+                    ( (RamReq = '0' and iSltMerq_n = '1') or
+                      (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
+                    wave_slot <= '1';
+                else
+                    wave_slot <= '0';
+                end if;
+            end if;
+            if( ff_sdr_seq = "101" )then
+                if( wave_slot = '1' )then
+                    -- the access is done when its data is on the bus (read) or written
+                    if( wave_we = '0' )then
+                        wave_rdat <= pMemDat;
+                    end if;
+                    wave_done_t <= wave_req_t;
+                    wave_wait   <= "00";
+                elsif( wave_pend = '0' )then
+                    wave_wait   <= "00";
+                elsif( SdrSta(2 downto 1) = "10" and wave_wait /= "11" )then
+                    wave_wait   <= wave_wait + 1;                           -- one more cpu slot waited
                 end if;
             end if;
         end if;
@@ -2797,6 +2860,14 @@ begin
                 when "000" =>
                     SdrUdq <= '1';
                     SdrLdq <= '1';
+                when "001" =>
+                    -- byte of a cpu / wave write, taken one memclk before "010": CpuAdr(0)
+                    -- comes from iSltAdr (clk21m) through the slot decoding, a long path
+                    if( wave_slot = '1' )then
+                        sdr_wr_a0 <= wave_adr(0);
+                    else
+                        sdr_wr_a0 <= CpuAdr(0);
+                    end if;
                 when "010" =>
                     if( SdrSta(2) = '1' )then
                         if( SdrSta(0) = '0' )then
@@ -2807,8 +2878,8 @@ begin
                                 SdrUdq <= '0';
                                 SdrLdq <= '0';
                             elsif( VideoDLClk = '0' )then
-                                SdrUdq <= not CpuAdr(0);
-                                SdrLdq <= CpuAdr(0);
+                                SdrUdq <= not sdr_wr_a0;                -- cpu or OPL4 wave write
+                                SdrLdq <= sdr_wr_a0;
                             else
                                 SdrUdq <= not VdpAdr(16);
                                 SdrLdq <= VdpAdr(16);
@@ -2847,6 +2918,9 @@ begin
                         if( RstSeq(4 downto 2) = "011" and warmRESET /= '1' )then
                             SdrAdr <= (others => '0');                              -- clear "AB" mark (ESE-SCC2 >> ESE-SCC1 >> ESE-RAM)
                             SdrBa  <= "1" & RstSeq(1);                              -- bank C+D
+                        elsif( VideoDLClk = '0' and wave_slot = '1' )then
+                            SdrAdr <= wave_sdr_adr(24 downto 23) & wave_sdr_adr(11 downto 1);   -- OPL4 wave memory
+                            SdrBa  <= wave_sdr_adr(22 downto 21);
                         elsif( VideoDLClk = '0' )then
                             SdrAdr <= CpuAdr(24 downto 23) & CpuAdr(11 downto 1);   -- cpu read/write
                             SdrBa  <= CpuAdr(22 downto 21);                         -- bank A+B+C+D
@@ -2865,6 +2939,9 @@ begin
                     elsif( RstSeq(4 downto 1) = "0111" and warmRESET /= '1' )then
                         SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
                         SdrAdr(8 downto 0) <= (others => '0');                                              -- clear ESE-RAM
+                    elsif( VideoDLClk = '0' and wave_slot = '1' )then
+                        SdrAdr(12 downto 11) <= wave_sdr_adr(24 downto 23);
+                        SdrAdr(8 downto 0) <= wave_sdr_adr(20 downto 12);                                   -- OPL4 wave memory
                     elsif( VideoDLClk = '0' )then
                         SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
                         SdrAdr(8 downto 0) <= CpuAdr(20 downto 12);                                         -- cpu read/write
@@ -2913,6 +2990,8 @@ begin
                     else
                         if( RstSeq(4 downto 3) /= "11" )then
                             SdrDat <= (others => '0');
+                        elsif( VideoDLClk = '0' and wave_slot = '1' )then
+                            SdrDat <= wave_wdat & wave_wdat;    -- OPL4 wave memory write
                         elsif( VideoDLClk = '0' )then
                             SdrDat <= dbo & dbo;                -- "101"(cpu write)
                         else
@@ -2931,10 +3010,14 @@ begin
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
-            if( ff_sdr_seq = "000" )then
+            if( wave_slot = '1' )then
+                null;                                                       -- OPL4 wave slot: not a cpu slot
+            elsif( ff_sdr_seq = "000" )then
                 sdr_slot_adr <= CpuAdr;
             end if;
-            if( ff_sdr_seq = "010" )then
+            if( wave_slot = '1' )then
+                null;
+            elsif( ff_sdr_seq = "010" )then
                 if( sdr_slot_adr = CpuAdr )then
                     sdr_slot_ok <= '1';
                 else
@@ -2951,7 +3034,7 @@ begin
                     sdr_rd_ok  <= '0';
                 end if;
             end if;
-            if( ff_sdr_seq = "101" and SdrSta = "100" )then                 -- read cpu
+            if( ff_sdr_seq = "101" and SdrSta = "100" and wave_slot = '0' )then  -- read cpu
                 sdr_rd_adr <= sdr_slot_adr;
                 sdr_rd_ok  <= sdr_slot_ok;
             end if;
@@ -2963,7 +3046,7 @@ begin
     begin
         if( memclk'event and memclk = '1' )then
             if( ff_sdr_seq = "101" )then
-                if( SdrSta = "100" )then                        -- read cpu
+                if( SdrSta = "100" and wave_slot = '0' )then  -- read cpu (not in an OPL4 wave slot)
                     if( CpuAdr(0) = '0' )then
                         RamDbi <= pMemDat(  7 downto 0 );
                     else
@@ -3012,7 +3095,7 @@ begin
         elsif( clk21m'event and clk21m = '1' )then
             if( RamReq = '0' )then
                 RamAck <= '0';
-            elsif( VideoDLClk = '0' and VideoDHClk = '1' )then
+            elsif( VideoDLClk = '0' and VideoDHClk = '1' and wave_slot = '0' )then     -- not in an OPL4 wave slot
                 RamAck <= '1';
             end if;
             if( VideoDLClk = '0' )then
@@ -3360,6 +3443,33 @@ begin
 
     -- turboR PCM sampler (microphone of the A1ST/GT): the 1-bit audio input (ear_i)
     tr_pcm_wave_in <= X"C0" when( ear_i = '1' )else X"40";
+
+    -- OPL4 wave memory test (ZEMMIX-0au.4): memory registers of the YMF278B on 7E-7Fh
+    wavetest_u : if opl4_memtest_g generate
+        u_wavetest : entity work.opl4_memtest
+            port map(
+                clk21m      => clk21m,
+                reset       => reset,
+                req         => wavetest_req,
+                wrt         => wrt,
+                adr0        => adr(0),
+                dbi         => wavetest_dbi,
+                dbo         => dbo,
+                wave_req_t  => wave_req_t,
+                wave_done_t => wave_done_t,
+                wave_we     => wave_we,
+                wave_adr    => wave_adr,
+                wave_wdat   => wave_wdat,
+                wave_rdat   => wave_rdat
+            );
+    end generate;
+
+    wavetest_off : if not opl4_memtest_g generate
+        wave_req_t  <= '0';
+        wave_we     <= '0';
+        wave_adr    <= (others => '0');
+        wave_wdat   <= (others => '0');
+    end generate;
 
     wifi : if use_wifi_g generate
         uwifi : work.wifi
