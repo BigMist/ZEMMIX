@@ -50,6 +50,7 @@ entity emsx_top is
         use_wifi_g      : boolean   := true;
         use_midi_g      : boolean   := true;
         use_opl3_g      : boolean   := true;
+        opl3_fpga_g     : boolean   := false;                           -- OPL3: false = opl3sw (Next186), true = opl3_fpga (Greg Taylor, clk_opl = 50MHz)
         use_dualpsg_g   : boolean   := true;
         psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
         opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz
@@ -691,6 +692,27 @@ architecture RTL of emsx_top is
     component opl3 is
         generic(
             OPLCLK          : integer := 64000000                               -- opl_clk in Hz
+        );
+        port(
+            clk             : in    std_logic;
+            clk_opl         : in    std_logic;
+            rst_n           : in    std_logic;
+            irq_n           : out   std_logic;
+
+            addr            : in    std_logic_vector(  1 downto 0 );
+            dout            : out   std_logic_vector(  7 downto 0 );
+            din             : in    std_logic_vector(  7 downto 0 );
+            we              : in    std_logic;
+            mono            : in    std_logic;
+
+            sample_l        : out   std_logic_vector( 15 downto 0 );
+            sample_r        : out   std_logic_vector( 15 downto 0 )
+         );
+    end component;
+
+    component opl3fpga_msx is
+        generic(
+            OPLCLK          : integer := 50000000                               -- opl_clk in Hz
         );
         port(
             clk             : in    std_logic;
@@ -3376,7 +3398,7 @@ begin
             );
     end generate;
 
-    opl3_u : if use_opl3_g generate
+    opl3_u : if use_opl3_g and not opl3_fpga_g generate
         opl3_1 : opl3
         generic map(
             OPLCLK              => opl3_clk_g           -- opl_clk in Hz
@@ -3388,6 +3410,28 @@ begin
             irq_n               => opl3_Int_n,
 
             addr                => adr(1 downto 0),     -- OPL and OPL2 uses adr(0) only
+            dout                => opl3_dout_s,
+            din                 => dbo,
+            we                  => opl3_ce,
+            mono                => '0',
+
+            sample_l            => opl3_l,
+            sample_r            => opl3_r
+        );
+    end generate;
+
+    opl3fpga_u : if use_opl3_g and opl3_fpga_g generate
+        opl3fpga_1 : opl3fpga_msx
+        generic map(
+            OPLCLK              => opl3_clk_g           -- must be 50MHz (CLOCK_50)
+        )
+        port map(
+            clk                 => clk21m,
+            clk_opl             => clk_opl,
+            rst_n               => (not reset),
+            irq_n               => opl3_Int_n,
+
+            addr                => adr(1 downto 0),
             dout                => opl3_dout_s,
             din                 => dbo,
             we                  => opl3_ce,

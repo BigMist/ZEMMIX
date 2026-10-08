@@ -544,9 +544,11 @@ localparam false = "false";
 
 // OPL3 clock: 50MHz as the OPL3 was designed for, memclk without CLOCK_50
 `ifdef USE_CLOCK_50
+localparam OPL3_FPGA = "true";   // OPL3 of Greg Taylor (misc/opl3fpga), needs 50MHz
 localparam OPL3_CLK = 50000000;
 wire clk_opl = CLOCK_50;
 `else
+localparam OPL3_FPGA = "false";  // opl3sw (misc/opl3) on memclk
 localparam OPL3_CLK = 86000000;
 wire clk_opl = memclk;
 `endif
@@ -555,6 +557,7 @@ emsx_top #(
     .use_wifi_g(true),   // activar interfaz UNAPI
     .use_midi_g(true),   // activar interfaz midi
     .use_opl3_g(true),  // false. cambiar a true para activar OPL3
+    .opl3_fpga_g(OPL3_FPGA),
     .use_dualpsg_g(false),// activar doble chip PSG
     .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
     .opl3_clk_g(OPL3_CLK)
