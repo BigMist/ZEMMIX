@@ -44,14 +44,14 @@
 module opl3fpga_timer
     import opl3_pkg::*;
 #(
-    parameter real TIMER_TICK_INTERVAL = 0 // time in seconds
+    parameter int TICK_COUNT = 4000 // ZEMMIX: clk cycles of a tick (was TIMER_TICK_INTERVAL in seconds, real)
 ) (
     input wire clk,
     input wire [REG_TIMER_WIDTH-1:0] timer_reg,
     input wire start_timer,
     output logic timer_overflow_pulse = 0
 );
-    localparam int TICK_TIMER_COUNT_VALUE = CLK_FREQ*TIMER_TICK_INTERVAL;
+    localparam int TICK_TIMER_COUNT_VALUE = TICK_COUNT;
 
     logic [$clog2(TICK_TIMER_COUNT_VALUE)-1:0] tick_counter = 0;
     logic tick_pulse = 0;

@@ -96,6 +96,10 @@ package opl3_pkg;
 
     localparam TIMER1_TICK_INTERVAL = 80e-6;  // in seconds
     localparam TIMER2_TICK_INTERVAL = 320e-6; // in seconds
+    // ZEMMIX: the same in clk cycles, as integers (CLK_FREQ * interval with reals is
+    // not computed right by every tool: MoonTANG saw a timer 30 times too slow on Gowin)
+    localparam int TIMER1_TICK_COUNT = 4000;    // 80 us at 50 MHz
+    localparam int TIMER2_TICK_COUNT = 16000;   // 320 us at 50 MHz
 
     typedef enum logic [2:0] {
         OP_NORMAL,

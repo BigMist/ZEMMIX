@@ -102,7 +102,7 @@ module timers
     end
 
     opl3fpga_timer #(
-        .TIMER_TICK_INTERVAL(TIMER1_TICK_INTERVAL)
+        .TICK_COUNT(TIMER1_TICK_COUNT)
     ) timer1_inst (
         .clk,
         .timer_reg(timer1),
@@ -111,7 +111,7 @@ module timers
     );
 
     opl3fpga_timer #(
-        .TIMER_TICK_INTERVAL(TIMER2_TICK_INTERVAL)
+        .TICK_COUNT(TIMER2_TICK_COUNT)
     ) timer2_inst (
         .clk,
         .timer_reg(timer2),
