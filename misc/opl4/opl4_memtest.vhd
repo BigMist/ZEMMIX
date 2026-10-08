@@ -13,6 +13,7 @@
 --             a read gives the byte read before, increments the address and
 --             starts the read of the next byte, as the real chip
 --   7Eh read: status, bit 0 = BUSY (memory access pending or in progress)
+--   reg FAh-FCh: ZEMMIX.ROM loader, bytes received (low byte first), FDh-FFh: bytes lost
 --
 --   One access at a time: a write that comes while another write is still pending
 --   replaces it (an access takes a few hundred ns, an OUT of the Z80 some us).
@@ -40,7 +41,10 @@ entity opl4_memtest is
         wave_we     : out   std_logic;
         wave_adr    : out   std_logic_vector( 21 downto 0 );
         wave_wdat   : out   std_logic_vector(  7 downto 0 );
-        wave_rdat   : in    std_logic_vector( 15 downto 0 )
+        wave_rdat   : in    std_logic_vector( 15 downto 0 );
+
+        dbg_rcv     : in    std_logic_vector( 23 downto 0 );   -- ZEMMIX.ROM loader: bytes received
+        dbg_lost    : in    std_logic_vector( 23 downto 0 )    -- and lost
     );
 end opl4_memtest;
 
@@ -135,5 +139,11 @@ begin
     dbi <=  "0000000" & (busy or ff_wr_pend or ff_rd_pend)  when( adr0 = '0' )else
             X"20"                                           when( ff_index = X"02" )else
             ff_rdout                                        when( ff_index = X"06" )else
+            dbg_rcv(  7 downto  0 )                         when( ff_index = X"FA" )else
+            dbg_rcv( 15 downto  8 )                         when( ff_index = X"FB" )else
+            dbg_rcv( 23 downto 16 )                         when( ff_index = X"FC" )else
+            dbg_lost(  7 downto  0 )                        when( ff_index = X"FD" )else
+            dbg_lost( 15 downto  8 )                        when( ff_index = X"FE" )else
+            dbg_lost( 23 downto 16 )                        when( ff_index = X"FF" )else
             X"FF";
 end RTL;

@@ -643,6 +643,9 @@ emsx_top #(
         .pVideoVS_n (VSync),    // VSync(RGB15K, VGA31K)
 		  .blank_o    (blank),
 
+		  .rom_dl_i    (ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd0),   // ZEMMIX.ROM (YRW801) sent by the firmware
+		  .rom_wr_i    (ioctl_wr),
+		  .rom_dat_i   (ioctl_dout),
 		  .opl3_l      (opl3_l),
 		  .opl3_r      (opl3_r),
 		  .opll_o      (opll_o),

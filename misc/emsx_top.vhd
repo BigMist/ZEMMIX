@@ -190,7 +190,12 @@ entity emsx_top is
 		  PsgVol_o       : out std_logic_vector( 2 downto 0 );
 		  SccVol_o       : out std_logic_vector( 2 downto 0 );
 		  OpllVol_o      : out std_logic_vector( 2 downto 0 );
-        btn_scan       : in    std_logic
+        btn_scan       : in    std_logic;
+
+        -- ZEMMIX.ROM (YRW801) from data_io index 0, to the OPL4 wave memory
+        rom_dl_i       : in    std_logic := '0';
+        rom_wr_i       : in    std_logic := '0';
+        rom_dat_i      : in    std_logic_vector(  7 downto 0 ) := (others => '0')
     );
 end emsx_top;
 
@@ -1078,6 +1083,15 @@ architecture RTL of emsx_top is
     signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
     signal  sdr_wr_a0       : std_logic := '0';                                     -- byte of the cpu / wave write (taken at "001")
     signal  wave_wait       : std_logic_vector(  1 downto 0 ) := "00";               -- cpu slots waited (R800)
+    -- wave memory client before the ZEMMIX.ROM loader (7Eh/7Fh test, later the PCM engine)
+    signal  wt_req_t        : std_logic := '0';
+    signal  wt_done_t       : std_logic;
+    signal  wt_we           : std_logic := '0';
+    signal  wt_adr          : std_logic_vector( 21 downto 0 ) := (others => '0');
+    signal  wt_wdat         : std_logic_vector(  7 downto 0 ) := (others => '0');
+    signal  wt_rdat         : std_logic_vector( 15 downto 0 );
+    signal  romload_rcv     : std_logic_vector( 23 downto 0 );
+    signal  romload_lost    : std_logic_vector( 23 downto 0 );
     signal  wavetest_req    : std_logic;
     signal  wavetest_dbi    : std_logic_vector(  7 downto 0 ) := (others => '1');
     signal  RamDbi          : std_logic_vector(  7 downto 0 );
@@ -3455,21 +3469,48 @@ begin
                 adr0        => adr(0),
                 dbi         => wavetest_dbi,
                 dbo         => dbo,
-                wave_req_t  => wave_req_t,
-                wave_done_t => wave_done_t,
-                wave_we     => wave_we,
-                wave_adr    => wave_adr,
-                wave_wdat   => wave_wdat,
-                wave_rdat   => wave_rdat
+                wave_req_t  => wt_req_t,
+                wave_done_t => wt_done_t,
+                wave_we     => wt_we,
+                wave_adr    => wt_adr,
+                wave_wdat   => wt_wdat,
+                wave_rdat   => wt_rdat,
+                dbg_rcv     => romload_rcv,
+                dbg_lost    => romload_lost
             );
     end generate;
 
     wavetest_off : if not opl4_memtest_g generate
-        wave_req_t  <= '0';
-        wave_we     <= '0';
-        wave_adr    <= (others => '0');
-        wave_wdat   <= (others => '0');
+        wt_req_t    <= '0';
+        wt_we       <= '0';
+        wt_adr      <= (others => '0');
+        wt_wdat     <= (others => '0');
     end generate;
+
+    -- ZEMMIX.ROM (YRW801, sent by the firmware when the core starts) to 000000h of
+    -- the wave memory, through a FIFO: the SDRAM may not be ready yet (ZEMMIX-0au.5)
+    u_romload : entity work.opl4_romload
+        port map(
+            clk21m      => clk21m,
+            dl          => rom_dl_i,
+            dl_wr       => rom_wr_i,
+            dl_dat      => rom_dat_i,
+            c_req_t     => wt_req_t,
+            c_done_t    => wt_done_t,
+            c_we        => wt_we,
+            c_adr       => wt_adr,
+            c_wdat      => wt_wdat,
+            c_rdat      => wt_rdat,
+            m_req_t     => wave_req_t,
+            m_done_t    => wave_done_t,
+            m_we        => wave_we,
+            m_adr       => wave_adr,
+            m_wdat      => wave_wdat,
+            m_rdat      => wave_rdat,
+            rcv_cnt     => romload_rcv,
+            lost_cnt    => romload_lost,
+            loading     => open
+        );
 
     wifi : if use_wifi_g generate
         uwifi : work.wifi
