@@ -2808,7 +2808,10 @@ begin
     begin
         if( memclk'event and memclk = '1' )then
             if( ff_sdr_seq = "111" )then
-                if( wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '0' and
+                -- V9968 dot states (DH/DL): 01, 10, 00, 11. A slot starts when DH rises: with
+                -- DL = 0 it is the cpu slot, with DL = 1 the vdp slot. At "111" the previous dot
+                -- state is still there, DL = 1 before a cpu slot (as the refresh above)
+                if( wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '1' and iSltRfsh_n = '1' and
                     ( (RamReq = '0' and iSltMerq_n = '1') or
                       (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
                     wave_slot <= '1';
@@ -2817,8 +2820,9 @@ begin
                 end if;
             end if;
             if( ff_sdr_seq = "101" )then
-                if( wave_slot = '1' )then
-                    -- the access is done when its data is on the bus (read) or written
+                if( wave_slot = '1' and SdrSta(2 downto 1) = "10" )then
+                    -- the access is done when its data is on the bus (read) or written,
+                    -- only in a real cpu slot (else it is tried again)
                     if( wave_we = '0' )then
                         wave_rdat <= pMemDat;
                     end if;
