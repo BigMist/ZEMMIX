@@ -196,7 +196,8 @@ reg  [2:0] rd_iss = 0, rd_cmp = 0;              // reads of 7Fh started / answer
 reg  [6:0] rd_cnt = 0;
 reg  [2:0] rdd_s = 0;
 wire       rd_back = rdd_s[2] != rdd_s[1];      // an answer
-wire       rd_ready = (rd7f_d && rd_cmp == rd_iss) || rd_cnt >= RD_MAX;
+reg        rd_ok = 0;                          // the answer of this IN is on bus_do since the last clock
+wire       rd_ready = rd_ok || rd_cnt >= RD_MAX;
 reg  [1:0] st_s0 = 2'b00;
 reg  [1:0] qb_s = 2'b00;                        // queue busy
 always @(posedge clk_bus) begin
@@ -206,6 +207,7 @@ always @(posedge clk_bus) begin
     if (rd_back)         rd_cmp <= rd_cmp + 1'd1;
     if (!rd7f)           rd_cnt <= 0;
     else if (!rd_ready)  rd_cnt <= rd_cnt + 1'd1;
+    rd_ok <= rd7f && rd7f_d && rd_cmp == rd_iss;  // one clock after bus_do took the answer
 
     st_s0 <= eng_status;
     qb_s  <= {qb_s[0], drv | !q_empty};

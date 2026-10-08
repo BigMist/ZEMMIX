@@ -2262,6 +2262,7 @@ begin
                           not (sdr_rd_ok = '1' and sdr_rd_adr = CpuAdr) )else
                 '0' when( rc_wram = '1' and not (sdr_wr_ok = '1' and sdr_wr_adr = CpuAdr and sdr_wr_dat = dbo) )else
                 '0' when( (rc_io = '1' or (rc_rd = '1' and (jSltMem = '0' or jSltScc1 = '1' or jSltScc2 = '1'))) and rc_cnt < "011" )else
+                '0' when( rc_io = '1' and opl4_wait_n = '0' )else                     -- OPL4: IN 7Fh until its data is there
                 '1';
 
     -- a device that ends its wait on edge W gives its data in dlydbi on edge W+1: the R800
