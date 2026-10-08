@@ -72,14 +72,23 @@ module timers
             if (opl3_reg_wr.bank_num == 0 && opl3_reg_wr.address == 3)
                 timer2 <= opl3_reg_wr.data;
 
+            // ZEMMIX: as the real chip, D7 = 1 only resets the flags (a pulse) and the
+            // other bits are ignored; before, it stopped the timers (ST1 = ST2 = 0) and
+            // kept the flags reset until the next write (MoonBlaster acks its timer IRQ
+            // with 80h and expects the timer to run on)
             if (opl3_reg_wr.bank_num == 0 && opl3_reg_wr.address == 4) begin
-                irq_rst <= opl3_reg_wr.data[7];
-                mt1 <= opl3_reg_wr.data[6];
-                mt2 <= opl3_reg_wr.data[5];
-                st2 <= opl3_reg_wr.data[1];
-                st1 <= opl3_reg_wr.data[0];
+                if (opl3_reg_wr.data[7])
+                    irq_rst <= 1;
+                else begin
+                    mt1 <= opl3_reg_wr.data[6];
+                    mt2 <= opl3_reg_wr.data[5];
+                    st2 <= opl3_reg_wr.data[1];
+                    st1 <= opl3_reg_wr.data[0];
+                end
             end
         end
+        else
+            irq_rst <= 0;
 
         if (reset) begin
             timer1 <= 0;

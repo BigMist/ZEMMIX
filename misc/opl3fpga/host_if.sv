@@ -129,7 +129,7 @@ module host_if
     // Doom DMXOPTION=-opl3-phase detection routine specifically reads address 'b10 to see if it's all ones
     // Decompiled routine provided by Never_Again at https://www.vogons.org/viewtopic.php?f=7&t=100285
     always_comb
-        dout = address_p1 == 0 ? host_status_p1 : '1;
+        dout = address_p1[0] == 0 ? host_status_p1 : '1;   // ZEMMIX: status on C4h and C6h (MoonSound)
 
     generate
     if (INSTANTIATE_TIMERS)

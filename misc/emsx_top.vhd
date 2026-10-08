@@ -1996,7 +1996,7 @@ begin
                 dlydbi <= portF4_bit7 & "1111111";
             elsif( mem = '0' and adr(  7 downto 1 ) = "0000011" and use_wifi_g )then                        -- ESP ports 06-07h
                 dlydbi <= esp_dout_s;
-            elsif( mem = '0' and adr(  7 downto 2 ) = "110001" and adr( 1 downto 0 ) = "00" and opl3_enabled = '1' and use_opl4_g )then  -- C4h status: OPL3 + {LD, BUSY} of the OPL4
+            elsif( mem = '0' and adr(  7 downto 2 ) = "110001" and adr(0) = '0' and opl3_enabled = '1' and use_opl4_g )then  -- C4h / C6h status: OPL3 + {LD, BUSY} of the OPL4
                 dlydbi <= opl3_dout_s or ("000000" & opl4_status);
             elsif( mem = '0' and adr(  7 downto 2 ) = "110001" and opl3_enabled = '1' )then                 -- OPL3 / MoonSound FM ports C4-C7h
                 dlydbi <= opl3_dout_s;
