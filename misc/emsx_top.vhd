@@ -51,6 +51,7 @@ entity emsx_top is
         use_midi_g      : boolean   := true;
         use_opl3_g      : boolean   := true;
         use_dualpsg_g   : boolean   := true;
+        psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
         opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz
     );
     port(
@@ -181,9 +182,12 @@ entity emsx_top is
 		  scc1_r         : out std_logic_vector(14 downto 0 );
  		  scc2_l         : out std_logic_vector(14 downto 0 );
 		  scc2_r         : out std_logic_vector(14 downto 0 );
-		  psg_o          : out std_logic_vector( 8 downto 0 );
+		  psg_o          : out std_logic_vector( 15 downto 0 );     -- PSG + PSG2 + key click, unsigned 0..26618
         TrPcm_o        : out std_logic_vector( 7 downto 0 );
-		  Vol_o          : out std_logic_vector( 2 downto 0 );
+		  Vol_o          : out std_logic_vector( 2 downto 0 );      -- MstrVol
+		  PsgVol_o       : out std_logic_vector( 2 downto 0 );
+		  SccVol_o       : out std_logic_vector( 2 downto 0 );
+		  OpllVol_o      : out std_logic_vector( 2 downto 0 );
         btn_scan       : in    std_logic
     );
 end emsx_top;
@@ -474,7 +478,10 @@ architecture RTL of emsx_top is
         );
     end component;
 
-    component psg
+    component msx_psg
+        generic(
+            YM          : integer := 0
+        );
         port(
             clk21m      : in    std_logic;
             reset       : in    std_logic;
@@ -497,7 +504,7 @@ architecture RTL of emsx_top is
             cmtin       : in    std_logic;
             keymode     : in    std_logic;
 
-            wave        : out   std_logic_vector(  7 downto 0 )
+            wave        : out   std_logic_vector( 14 downto 0 )
         );
     end component;
 
@@ -985,12 +992,12 @@ architecture RTL of emsx_top is
     -- PSG signals
     signal  PsgReq          : std_logic;
     signal  PsgDbi          : std_logic_vector(  7 downto 0 );
-    signal  PsgAmp          : std_logic_vector(  7 downto 0 );
+    signal  PsgAmp          : std_logic_vector( 14 downto 0 );
 
     -- PSG2 signals
     signal  Psg2Req         : std_logic;
     signal  Psg2Dbi         : std_logic_vector(  7 downto 0 );
-    signal  Psg2Amp         : std_logic_vector(  7 downto 0 );
+    signal  Psg2Amp         : std_logic_vector( 14 downto 0 );
 
     -- SCC signals
     signal  Scc1Req         : std_logic;
@@ -3165,14 +3172,20 @@ begin
         port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,
                         videoY, videoC, videoV);
 
-    U30_1 : psg
+    U30_1 : msx_psg
+        generic map(psg_ym_g)
         port map(clk21m, reset, clkena, PsgReq, open, wrt, adr, PsgDbi, dbo,
                         w_pJoyA_in, w_pJoyA_out_m, w_pStrA_m, w_pJoyB_in, pJoyB_out, pStrB, Kana, CmtIn, w_key_mode, PsgAmp);
 
     psg2_u : if use_dualpsg_g generate
-        U30_2 : psg
+        U30_2 : msx_psg
+            generic map(psg_ym_g)
             port map(clk21m, reset, clkena, Psg2Req, open, wrt, adr, Psg2Dbi, dbo,
                             "111111", open, open, "111111", open, open, open, '0', '0', Psg2Amp);
+    end generate;
+
+    psg2_off : if not use_dualpsg_g generate
+        Psg2Amp <= (others => '0');
     end generate;
 
     U31_1 : megaram
@@ -3193,7 +3206,12 @@ begin
 
 
     opll_o <= OpllWav;
-	 psg_o <=  (('1'& PsgAmp ) + (KeyClick & "00000")) + Psg2Amp;
+	 -- unipolar PSG level (the mixer removes the DC): no offset, PSG and PSG2 at full resolution
+	 -- (0..12285 each) and the key click at 2048, 16 bits so that the sum does not wrap
+	 psg_o <=  ('0' & PsgAmp) + ('0' & Psg2Amp) + ("0000" & KeyClick & "00000000000");
+	 PsgVol_o  <= PsgVol;
+	 SccVol_o  <= SccVol;
+	 OpllVol_o <= OpllVol;
 	 vol_o <= MstrVol;
 	 
     U34 : system_timer
@@ -3318,7 +3336,8 @@ begin
         port map(clk21m, reset, tr_pcm_req, open, wrt, adr(0), tr_pcm_dbi, dbo,
                         tr_pcm_wave_in, trPcm_o);
 
-    tr_pcm_wave_in <= (others => '0');
+    -- turboR PCM sampler (microphone of the A1ST/GT): the 1-bit audio input (ear_i)
+    tr_pcm_wave_in <= X"C0" when( ear_i = '1' )else X"40";
 
     wifi : if use_wifi_g generate
         uwifi : work.wifi

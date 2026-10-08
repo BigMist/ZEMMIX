@@ -556,6 +556,7 @@ emsx_top #(
     .use_midi_g(true),   // activar interfaz midi
     .use_opl3_g(true),  // false. cambiar a true para activar OPL3
     .use_dualpsg_g(false),// activar doble chip PSG
+    .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
     .opl3_clk_g(OPL3_CLK)
 ) emsx (
 
@@ -648,6 +649,9 @@ emsx_top #(
 		  .TrPcm_o     (TrPcm_o),
 		  .psg_o       (psg_o),
 		  .vol_o       (vol_o),
+		  .PsgVol_o    (psg_vol),
+		  .SccVol_o    (scc_vol),
+		  .OpllVol_o   (opll_vol),
 
 `ifdef SWAP_PORTS
 		  // swapped ports
@@ -661,7 +665,7 @@ emsx_top #(
         //proper port location
    `ifdef USE_EXTBUS			  
 		  .esp_rx_o    (BUS_TX),
-        .esp_tx_i    (BUS_RX)
+        .esp_tx_i    (BUS_RX),
    `endif
 		  .midi_o      (UART_TX),
 		  .midi_i      (UART_RX)
@@ -673,58 +677,52 @@ emsx_top #(
 ////////////////////   AUDIO   ///////////////////
 
 
-reg signed  [15:0] sum_audioL;
-reg signed  [15:0] sum_audioR;
 reg signed [15:0] opll_o;
-reg unsigned [15:0] opl3_l;
-reg unsigned [15:0] opl3_r;
+reg signed [15:0] opl3_l;
+reg signed [15:0] opl3_r;
 reg signed [14:0] scc1_r;
 reg signed [14:0] scc1_l;
-reg signed[14:0] scc2_r;
-reg signed[14:0] scc2_l;
+reg signed [14:0] scc2_r;
+reg signed [14:0] scc2_l;
 reg signed [7:0] TrPcm_o;
-reg unsigned [8:0] psg_o;
+reg [15:0] psg_o;
 
-wire signed [15:0] tape_sound;
-reg unsigned [15:0] scc_ul;
-reg unsigned [15:0] scc_ur;
-reg unsigned[15:0] opl_ul ;
-reg unsigned[15:0] opl_ur ;
+wire [2:0] vol_o, psg_vol, scc_vol, opll_vol;
 
-reg unsigned [15:0] opll_u ;
-reg unsigned [15:0] opl3_ul;
-reg unsigned [15:0] opl3_ur;
-
-assign opll_u =opll_o;
-assign opl3_ul=opl3_l;
-assign opl3_ur=opl3_r;
-
-assign scc_ul = scc1_l+scc2_l;
-assign scc_ur = scc1_r+scc2_r;
-
-
-assign opl_ul={opll_u} + {opl3_ul};
-assign opl_ur={opll_u} + {opl3_ur};
-assign tape_sound = status[9]? {8'b0,AUDIO_IN,7'b0} : 16'bZ ;
-
-// turboR PCM: signed 8 bits, sign extended and scaled like the other sources (x64,
-// +-8192); {TrPcm_o,TrPcm_o} was full scale and wrapped the 16-bit sum
-wire signed [15:0] trpcm_s = {{2{TrPcm_o[7]}}, TrPcm_o, 6'b0};
-
-assign sum_audioR = opl_ur + scc_ur + {1'b0,psg_o,6'b0} + trpcm_s + tape_sound;
-assign sum_audioL = opl_ul + scc_ul + {1'b0,psg_o,6'b0} + trpcm_s + tape_sound;
-
-wire [2:0] vol_o;
+`ifdef USE_AUDIO_IN
+wire tape_in = AUDIO_IN;
+`else
+wire tape_in = 1'b0;
+`endif
 
 wire signed [15:0] i2saudio_r,i2saudio_l;
+wire        [15:0] dacaudio_l,dacaudio_r;
 
-StereoVolumenControl StereoVolumenControl
+// mixer: sign extension, headroom and saturation, DC removal of the PSG / tape,
+// OCM volumes per source and master volume (misc/audio_mix.sv)
+audio_mix audio_mix
 (
- .volume_ctrl  (vol_o),
- .audio_left_in(sum_audioL),
- .audio_right_in(sum_audioR),
- .audio_left_out (i2saudio_l),
- .audio_right_out(i2saudio_r)
+ .clk      (clk_sys),
+ .reset    (reset),
+ .opl3_l   (opl3_l),
+ .opl3_r   (opl3_r),
+ .opll     (opll_o),
+ .scc1_l   (scc1_l),
+ .scc1_r   (scc1_r),
+ .scc2_l   (scc2_l),
+ .scc2_r   (scc2_r),
+ .psg      (psg_o),
+ .pcm      (TrPcm_o),
+ .tape_en  (status[9]),
+ .tape_in  (tape_in),
+ .psg_vol  (psg_vol),
+ .scc_vol  (scc_vol),
+ .opll_vol (opll_vol),
+ .mstr_vol (vol_o),
+ .out_l    (i2saudio_l),
+ .out_r    (i2saudio_r),
+ .dac_l    (dacaudio_l),
+ .dac_r    (dacaudio_r)
 );
 
 `ifdef I2S_AUDIO
@@ -764,8 +762,6 @@ spdif spdif (
 );
 `endif
 
-wire unsigned [15:0] dacaudio_l=i2saudio_l;
-wire unsigned [15:0] dacaudio_r=i2saudio_r;
  
 dac #(
    .c_bits      (16))
