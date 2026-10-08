@@ -401,6 +401,9 @@ wire        ioctl_download;
 wire  [5:0] ioctl_index;
 wire  [1:0] ioctl_ext_index;
 
+// ZEMMIX.ROM (YRW801) download, data_io index 0: the MSX in reset, the SDRAM for the loader
+wire rom_dl = ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd0;
+
 data_io data_io
 (
 	.clk_sys(clk_sys),
@@ -463,9 +466,9 @@ wire [7:0] leds;
 reg reset;
 reg  [27:0] img_reset_cnt = 0;
 `ifdef USE_EXTBUS	
-wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked | !BUS_nRESET;
+wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked | !BUS_nRESET | rom_dl;
 `else
-wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked;
+wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked | rom_dl;
 `endif
 
 always @(posedge clk_sys) begin
@@ -646,7 +649,7 @@ emsx_top #(
 		  .blank_o    (blank),
 
 		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
-		  .rom_dl_i    (ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd0),   // ZEMMIX.ROM (YRW801) sent by the firmware
+		  .rom_dl_i    (rom_dl),                                              // ZEMMIX.ROM (YRW801) sent by the firmware
 		  .rom_wr_i    (ioctl_wr),
 		  .rom_dat_i   (ioctl_dout),
 		  .opl3_l      (opl3_l),
