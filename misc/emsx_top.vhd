@@ -1082,6 +1082,7 @@ architecture RTL of emsx_top is
     signal  wave_pend       : std_logic;
     signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
     signal  sdr_wr_a0       : std_logic := '0';                                     -- byte of the cpu / wave write (taken at "001")
+    signal  CpuAdr_r        : std_logic_vector( 24 downto 0 ) := (others => '0');   -- CpuAdr registered in memclk (ZEMMIX-dl0)
     signal  wave_wait       : std_logic_vector(  1 downto 0 ) := "00";               -- cpu slots waited (R800)
     -- wave memory client before the ZEMMIX.ROM loader (7Eh/7Fh test, later the PCM engine)
     signal  wt_req_t        : std_logic := '0';
@@ -2738,6 +2739,17 @@ begin
                             "01"     & KanAdr(17 downto  0)                 when( rom_kanj = '1' )else                          -- [ D ]040000-07FFFF ( 256 kB) Kanji-data (JIS1+JIS2)
                             (others => '0');
 
+    -- CpuAdr registered in memclk for the SDRAM side (ZEMMIX-dl0): the slot decoding
+    -- (iSltAdr, PpiPortA, ExpSlot3 -> iSlt* -> CpuAdr) was the critical memclk path into
+    -- SdrAdr / SdrUdq. The cpu sees its address one memclk (11.6 ns) later, and every
+    -- SDRAM process uses this copy, so the R800 slot tracking stays consistent.
+    process( memclk )
+    begin
+        if( memclk'event and memclk = '1' )then
+            CpuAdr_r <= CpuAdr;
+        end if;
+    end process;
+
     ----------------------------------------------------------------
     -- SDRAM access
     ----------------------------------------------------------------
@@ -2884,7 +2896,7 @@ begin
                     if( wave_slot = '1' )then
                         sdr_wr_a0 <= wave_adr(0);
                     else
-                        sdr_wr_a0 <= CpuAdr(0);
+                        sdr_wr_a0 <= CpuAdr_r(0);
                     end if;
                 when "010" =>
                     if( SdrSta(2) = '1' )then
@@ -2940,8 +2952,8 @@ begin
                             SdrAdr <= wave_sdr_adr(24 downto 23) & wave_sdr_adr(11 downto 1);   -- OPL4 wave memory
                             SdrBa  <= wave_sdr_adr(22 downto 21);
                         elsif( VideoDLClk = '0' )then
-                            SdrAdr <= CpuAdr(24 downto 23) & CpuAdr(11 downto 1);   -- cpu read/write
-                            SdrBa  <= CpuAdr(22 downto 21);                         -- bank A+B+C+D
+                            SdrAdr <= CpuAdr_r(24 downto 23) & CpuAdr_r(11 downto 1);   -- cpu read/write
+                            SdrBa  <= CpuAdr_r(22 downto 21);                         -- bank A+B+C+D
                         else
                             SdrAdr <= "00" & VdpAdr(10 downto 0);                   -- vdp read/write
                             SdrBa  <= "11";                                         -- bank D
@@ -2952,17 +2964,17 @@ begin
                     -- when A10=1, SdrBa is ignored and all banks are selected
                     -- be careful not to assign SdrBa during auto precharge, otherwise it will cause instability
                     if( RstSeq(4 downto 1) = "0110" and warmRESET /= '1' )then
-                        SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
+                        SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
                         SdrAdr(8 downto 0) <= RstSeq(0) & "00000000";                                       -- clear ESE-SCC2 >> ESE-SCC1
                     elsif( RstSeq(4 downto 1) = "0111" and warmRESET /= '1' )then
-                        SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
+                        SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
                         SdrAdr(8 downto 0) <= (others => '0');                                              -- clear ESE-RAM
                     elsif( VideoDLClk = '0' and wave_slot = '1' )then
                         SdrAdr(12 downto 11) <= wave_sdr_adr(24 downto 23);
                         SdrAdr(8 downto 0) <= wave_sdr_adr(20 downto 12);                                   -- OPL4 wave memory
                     elsif( VideoDLClk = '0' )then
-                        SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
-                        SdrAdr(8 downto 0) <= CpuAdr(20 downto 12);                                         -- cpu read/write
+                        SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
+                        SdrAdr(8 downto 0) <= CpuAdr_r(20 downto 12);                                         -- cpu read/write
                     elsif( VdpAdr(15) = '0' )then
                         SdrAdr(12 downto 11) <= "00";
                         SdrAdr(8 downto 0) <= "1" & vram_page(3 downto 0) & VdpAdr(14 downto 11);           -- vdp read/write (even)
@@ -3031,23 +3043,23 @@ begin
             if( wave_slot = '1' )then
                 null;                                                       -- OPL4 wave slot: not a cpu slot
             elsif( ff_sdr_seq = "000" )then
-                sdr_slot_adr <= CpuAdr;
+                sdr_slot_adr <= CpuAdr_r;
             end if;
             if( wave_slot = '1' )then
                 null;
             elsif( ff_sdr_seq = "010" )then
-                if( sdr_slot_adr = CpuAdr )then
+                if( sdr_slot_adr = CpuAdr_r )then
                     sdr_slot_ok <= '1';
                 else
                     sdr_slot_ok <= '0';
                 end if;
                 if( SdrSta = "101" and RstSeq(4 downto 3) = "11" )then        -- write cpu
-                    if( sdr_slot_adr = CpuAdr )then
+                    if( sdr_slot_adr = CpuAdr_r )then
                         sdr_wr_ok <= '1';
                     else
                         sdr_wr_ok <= '0';
                     end if;
-                    sdr_wr_adr <= CpuAdr;
+                    sdr_wr_adr <= CpuAdr_r;
                     sdr_wr_dat <= dbo;
                     sdr_rd_ok  <= '0';
                 end if;
@@ -3065,7 +3077,7 @@ begin
         if( memclk'event and memclk = '1' )then
             if( ff_sdr_seq = "101" )then
                 if( SdrSta = "100" and wave_slot = '0' )then  -- read cpu (not in an OPL4 wave slot)
-                    if( CpuAdr(0) = '0' )then
+                    if( CpuAdr_r(0) = '0' )then
                         RamDbi <= pMemDat(  7 downto 0 );
                     else
                         RamDbi <= pMemDat( 15 downto 8 );
