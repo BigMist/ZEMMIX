@@ -1577,8 +1577,7 @@ begin
                     else
                         HardRst_cnt <= "1001";                                          -- short click < 800ms (M51953BFP is not there)
                     end if;
-                elsif( w_10hz = '1' and HardRst_cnt /= "0001" and rom_dl_i = '0' )then   -- timeout (not during the ZEMMIX.ROM download:
-                                                                                        -- it keeps the reset for 1-2 s, a long click would restart RstSeq)
+                elsif( w_10hz = '1' and HardRst_cnt /= "0001" )then                     -- timeout
                     HardRst_cnt <= HardRst_cnt - 1;
                 end if;
             else
@@ -1593,7 +1592,10 @@ begin
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
-            if( HardRst_cnt = "0010" or bios_reload_ack = '1' )then                     -- long click > 800ms
+            -- ZEMMIX: not during the ZEMMIX.ROM download (the MSX is in reset for 1-2 s then, at
+            -- power on HardRst_cnt is "0010" at once): RstSeq goes on and the SDRAM is ready for
+            -- the loader after about 24 ms, else its FIFO overflows
+            if( (HardRst_cnt = "0010" and rom_dl_i = '0') or bios_reload_ack = '1' )then   -- long click > 800ms
                 RstSeq <= "00000";                                                      -- RstSeq is required
                 ff_reload_n <= '0';                                                     -- OCM-BIOS is partial
             elsif( ff_mem_seq = "00" and FreeCounter = X"FFFF" and RstSeq /= "11111" )then
