@@ -194,6 +194,9 @@ entity emsx_top is
 		  OpllVol_o      : out std_logic_vector( 2 downto 0 );
         btn_scan       : in    std_logic;
 
+        -- OSD: MoonSound (OPL3 + OPL4) on
+        opl_on_i       : in    std_logic := '1';
+
         -- ZEMMIX.ROM (YRW801) from data_io index 0, to the OPL4 wave memory
         rom_dl_i       : in    std_logic := '0';
         rom_wr_i       : in    std_logic := '0';
@@ -1295,8 +1298,9 @@ begin
     begin
         if( clk21m'event and clk21m = '1' )then
             -- OPL3 can be managed by the SCRLK key or by the CmtScro signal
+            -- ZEMMIX: on at power on (MoonSound) if the OSD option is on, SCRLK turns it off
             if( use_opl3_g )then
-                opl3_enabled <= CmtScro;
+                opl3_enabled <= opl_on_i and not CmtScro;
             else
                 opl3_enabled <= '0';
             end if;

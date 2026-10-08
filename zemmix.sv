@@ -228,6 +228,8 @@ localparam CONF_STR = {
 	"P1O7,RAM,2048kB,4096kB;",
 	"P1O8,internal MegaSD,Off,on;",
    "O9,Tape sound,OFF,ON;",
+   "OAB,Scanlines,Off,25%,50%,75%;",
+   "OC,MoonSound (OPL3/OPL4),On,Off;",
    "T0,Reset;",
 	"V,v1.0.",`BUILD_DATE
 };
@@ -643,6 +645,7 @@ emsx_top #(
         .pVideoVS_n (VSync),    // VSync(RGB15K, VGA31K)
 		  .blank_o    (blank),
 
+		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
 		  .rom_dl_i    (ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd0),   // ZEMMIX.ROM (YRW801) sent by the firmware
 		  .rom_wr_i    (ioctl_wr),
 		  .rom_dat_i   (ioctl_dout),
@@ -824,7 +827,7 @@ mist_video
 	.ce_divider   (3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
 	.scandoubler_disable(scandoubler_disable),   // F18A: 15kHz from the VDP, MiST doubles
 	.no_csync     (1'b1),
-	.scanlines    (2'b00),
+	.scanlines    (status[11:10]),
 	.ypbpr        (1'b0      )
 	);
 
@@ -864,7 +867,7 @@ hdmi_video (
 	.SPI_SCK     ( SPI_SCK    ),
 	.SPI_SS3     ( SPI_SS3    ),
 	.SPI_DI      ( SPI_DI     ),
-	.scanlines   (2'b00),                        // status[9:7] are other options (DIP switches, tape)
+	.scanlines   (status[11:10]),
 	.ce_divider  ( 3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
 	.scandoubler_disable (1'b0),                 // F18A: HDMI always doubled
 	.no_csync    ( 1'b1       ),

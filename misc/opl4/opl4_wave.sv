@@ -8,8 +8,10 @@
 //   * bus: every access to C4h-C7h (A = 0-3) and 7Eh-7Fh (A = 4-5) goes to the engine,
 //     which follows NEW2 from the FM writes (bank 1 reg 05h) and clears LD2 when C4h
 //     is read. The strobes are synchronized to clk_eng, A and DI are stable by then.
-//   * reads of 7Fh: the data comes back after a fixed time (bus_wait_n low for RD_WAIT
-//     clk_bus cycles from the start of the IN) and is held until the end of the IN.
+//   * reads of 7Fh: the engine counts 4 CE after the read (REG_Q is stable then, also when
+//     its CE was held for a memory access) and gives the data back with a toggle, about
+//     300 ns: in time for a Z80 at 3.58 MHz (it samples about 700 ns after RD). bus_wait_n
+//     is low until then, straight from the bus signals, for the faster cpus (RD_MAX at most).
 //     bus_status {LD, BUSY} is given for 7Eh and to be ORed into the C4h status.
 //   * memory: the engine asks for a byte when a window starts and samples it at the
 //     next CYCLE1_CE, about 7 CE later, with no wait. The request crosses to clk_bus
@@ -24,7 +26,7 @@ module opl4_wave
 #(
     parameter          CE_INC  = 24'd10584,     // 33.8688 MHz / 50 MHz = 10584 / 15625
     parameter          CE_MOD  = 24'd15625,
-    parameter          RD_WAIT = 5'd18          // clk_bus cycles of wait for a read of 7Fh (838 ns)
+    parameter          RD_MAX  = 5'd30          // longest wait of an IN 7Fh in clk_bus cycles (1.4 us)
 )
 (
     input  wire        clk_bus,
@@ -61,22 +63,26 @@ initial begin
     pcm_l = 0; pcm_r = 0;
 end
 
-//------------------------------------------------------------------ bus side: wait for 7Fh (clk_bus)
-reg  [4:0] rd_cnt = 0;
-reg        rd_act = 0;                          // IN 7Fh in progress
-reg        bus_rd_d = 1;
+//------------------------------------------------------------------ bus side: read of 7Fh (clk_bus)
+wire       rd7f = bus_cs && !bus_rd_n && bus_a == 3'd5;
+reg  [4:0] rd_cnt = 0;                         // clk_bus cycles since the start of the IN 7Fh
+reg        rd_ok = 0;                          // the data of this IN is on bus_do
+reg  [2:0] rdd_s = 0;                          // read done toggle from clk_eng
+reg        rd_done_t;                          // (clk_eng)
+reg  [7:0] rd_q;                               // (clk_eng, stable when the toggle is seen)
+wire       rd_ready = rd_ok || rd_cnt >= RD_MAX;
 always @(posedge clk_bus) begin
-    bus_rd_d <= bus_rd_n;
-    if (bus_cs && !bus_rd_n && bus_rd_d && bus_a == 3'd5) begin
-        rd_act <= 1;
-        rd_cnt <= RD_WAIT;
+    rdd_s <= {rdd_s[1:0], rd_done_t};
+    if (!rd7f) begin
+        rd_cnt <= 0;
+        rd_ok  <= 0;
     end
     else begin
-        if (rd_cnt != 0) rd_cnt <= rd_cnt - 1'd1;
-        if (bus_rd_n) rd_act <= 0;
+        if (!rd_ready) rd_cnt <= rd_cnt + 1'd1;
+        if (rdd_s[2] != rdd_s[1]) rd_ok <= 1;
     end
 end
-assign bus_wait_n = ~(rd_act && rd_cnt != 0);
+assign bus_wait_n = ~(rd7f && !rd_ready);
 
 //------------------------------------------------------------------ engine reset / bus sync (clk_eng)
 reg  [1:0] rst_s = 2'b00;
@@ -227,18 +233,37 @@ always @(posedge clk_bus) begin
 end
 
 //------------------------------------------------------------------ status, read data (to clk_bus)
-reg  [7:0] do_e = 8'hFF;
 reg  [1:0] st_e = 2'b00;
-reg  [7:0] do_s0 = 8'hFF, do_s = 8'hFF;
 reg  [1:0] st_s0 = 2'b00;
+// read of A = 5 (7Fh): 4 CE after it REG_Q is the data
+reg  [2:0] rd_ce = 0;
+reg        rd_busy = 0;
+reg        rd_s_d = 1;
+initial begin rd_done_t = 0; rd_q = 8'hFF; end
 always @(posedge clk_eng) begin
-    do_e <= eng_do;
+    rd_s_d <= rd_s[1];
+    if (!rd_s[1] && rd_s_d && cs_s[1] && a_s == 3'd5) begin
+        rd_busy <= 1;
+        rd_ce   <= 0;
+    end
+    else if (rd_busy && ce) begin
+        if (rd_ce == 3'd4) begin
+            rd_q      <= eng_do;
+            rd_done_t <= ~rd_done_t;
+            rd_busy   <= 0;
+        end
+        else rd_ce <= rd_ce + 1'd1;
+    end
+end
+
+always @(posedge clk_eng) begin
     if (a_s != 3'd5) st_e <= eng_do[1:0];      // DO is the status for A <> 5: {LD, BUSY}
 end
 always @(posedge clk_bus) begin
-    do_s0 <= do_e;  do_s <= do_s0;
     st_s0 <= st_e;  bus_status <= st_s0;
-    if (rd_act && rd_cnt == 5'd1) bus_do <= do_s;          // 7Fh: data at the end of the wait
+    if (rd7f) begin
+        if (rdd_s[2] != rdd_s[1]) bus_do <= rd_q;     // 7Fh: the data, then held until the end of the IN
+    end
     else if (bus_rd_n) bus_do <= {6'b000000, bus_status};  // 7Eh: status (held during an IN)
 end
 
