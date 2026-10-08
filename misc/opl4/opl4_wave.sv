@@ -23,8 +23,9 @@
 //     accumulator keeps its credit and catches up after (the average sample rate does
 //     not move). A one-word cache serves the other byte of the last 16-bit word.
 //     Writes to 000000h-1FFFFFh (the YRW801 ROM) are ignored, as on the MoonSound.
-//   * audio: OUT2 of the engine (PCM with the F9h mix attenuation), held every 64
-//     clk_eng and copied to clk_bus with a toggle.
+//   * audio: OUT2 of the engine (PCM with the F9h mix attenuation), through a FIFO
+//     read at a steady 44.1 kHz (no wow and flutter from the held CE), copied to
+//     clk_bus with a toggle.
 //
 module opl4_wave
 #(
@@ -134,6 +135,7 @@ end
 // and when the engine is not BUSY. A read of A = 5 takes REG_Q 5 CE after its strobe.
 wire  [7:0] eng_do;
 wire  [1:0] eng_status;
+wire        sample_ce;                          // the engine has a new sample
 reg         drv = 0;
 reg   [3:0] ph = 0;
 reg         drv_rd = 0, drv_cs = 0, drv_rd_n = 1, drv_wr_n = 1;
@@ -203,7 +205,8 @@ YMF278B ymf
     .SND_EN     (3'b111),
     .MONO       (1'b0),
     .CYCLE1_NEXT(cycle1_next),
-    .STATUS     (eng_status)
+    .STATUS     (eng_status),
+    .SAMPLE_CE  (sample_ce)
 );
 
 //------------------------------------------------------------------ bus side: reads of 7Fh, status (clk_bus)
@@ -336,15 +339,40 @@ always @(posedge clk_bus) begin
 end
 
 //------------------------------------------------------------------ audio (to clk_bus)
+// The engine makes its samples at 44.1 kHz on average only: its CE stops while it
+// waits for the wave memory and catches up after, so taken as they come the samples
+// wow and flutter like a slow tape. They go through a FIFO, read at a steady 44.1 kHz
+// (50 MHz * 441 / 500000), from half full: the average rates are the same.
+reg  [31:0] sfifo [0:31];                       // {L, R}
+reg   [4:0] sf_wp = 0, sf_rp = 0;
+wire  [4:0] sf_lvl = sf_wp - sf_rp;
+reg         sf_run = 0;
+reg         sample_ce_d = 0;
+reg  [18:0] sacc = 0;
 reg  [15:0] hold_l = 0, hold_r = 0;
-reg   [5:0] hold_cnt = 0;
 reg         hold_tg = 0;
 always @(posedge clk_eng) begin
-    hold_cnt <= hold_cnt + 1'd1;
-    if (hold_cnt == 0) begin
-        hold_l  <= out2_l;
-        hold_r  <= out2_r;
-        hold_tg <= ~hold_tg;
+    sample_ce_d <= sample_ce;                   // OUT2 has the new sample one clock later
+    if (sample_ce_d && sf_lvl != 5'd31) begin
+        sfifo[sf_wp] <= {out2_l, out2_r};
+        sf_wp <= sf_wp + 1'd1;
+    end
+
+    if (sacc + 19'd441 >= 19'd500000) begin     // a 44.1 kHz tick
+        sacc <= sacc + 19'd441 - 19'd500000;
+        if (sf_run && sf_lvl != 0) begin
+            {hold_l, hold_r} <= sfifo[sf_rp];
+            sf_rp   <= sf_rp + 1'd1;
+            hold_tg <= ~hold_tg;
+        end
+        if (sf_lvl >= 5'd16) sf_run <= 1;       // start from half full
+        else if (sf_lvl == 0) sf_run <= 0;      // empty (engine stopped): fill again
+    end
+    else sacc <= sacc + 19'd441;
+
+    if (!eng_rst_n) begin
+        sf_rp  <= sf_wp;
+        sf_run <= 0;
     end
 end
 reg  [2:0] tg_s = 0;

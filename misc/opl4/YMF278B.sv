@@ -1,8 +1,9 @@
 //license:BSD-3-Clause (PCM engine derived from MAME's ymf278b)
 // srg320/Arcade-PsikyoSH2_MiSTer rtl/PSH2/YMF278B.sv (commit 1a1d3e6, 2026-07-31).
 // ZEMMIX: OPL4_CH_RAM / OPL4_REG_RAM with ram_block_type "AUTO" and Cyclone 10 LP
-// as intended family (M9K instead of the M10K of the Cyclone V), and the CYCLE1_NEXT
-// and STATUS outputs (the next CE samples MDI, {LD, BUSY}) for the glue, and
+// as intended family (M9K instead of the M10K of the Cyclone V); CYCLE1_NEXT, STATUS
+// and SAMPLE_CE outputs (the next CE samples MDI, {LD, BUSY}, a new sample) for the
+// glue;
 // reg 03h takes 6 bits of address (A21-A16) as the real chip, and the memory address
 // moves as in openMSX: reg 06h is read / written at MEMADDR, then MEMADDR + 1 (the
 // read of reg 05h / 06h is a prefetch that does not move it).
@@ -47,7 +48,8 @@ module YMF278B
 	input              MONO,
 
 	output             CYCLE1_NEXT,   // ZEMMIX: the next CE is a CYCLE1_CE (MDI is sampled)
-	output     [ 1: 0] STATUS         // ZEMMIX: {LD, BUSY} as read on A <> 5
+	output     [ 1: 0] STATUS,        // ZEMMIX: {LD, BUSY} as read on A <> 5
+	output             SAMPLE_CE      // ZEMMIX: PCM_L / PCM_R (OUT1 / OUT2) get a new sample
 	
 `ifdef DEBUG
                       ,
@@ -705,6 +707,7 @@ module YMF278B
 	
 	//Out
 	bit  [15: 0] PCM_L,PCM_R;
+	assign SAMPLE_CE = (OP7.SLOT == 5'd0 && CYCLE_NUM[2:1] == 2'b00 && CYCLE1_CE);
 	always @(posedge CLK or negedge RST_N) begin
 		if (!RST_N) begin
 			PCM_L <= '0;
