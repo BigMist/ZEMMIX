@@ -188,8 +188,10 @@ localparam SDRAM2 = "false";
 v9990_needs_DUAL_SDRAM v9990_needs_DUAL_SDRAM();   // no such module: build error
 `endif
 localparam V9990 = "true";
+`define V99_OSD "ODE,Video out (GFX9000),Auto,V9958,V9990;",
 `else
 localparam V9990 = "false";
+`define V99_OSD
 `endif
 
 `ifdef USE_HDMI
@@ -218,6 +220,7 @@ localparam CONF_STR = {
    "O9,Tape sound,OFF,ON;",
    "OAB,Scanlines,Off,25%,50%,75%;",
    "OC,MoonSound (OPL3/OPL4),On,Off;",
+   `V99_OSD
    "T0,Reset;",
 	"V,v1.0.",`BUILD_DATE
 };
@@ -312,11 +315,12 @@ sdram2clk_ddr
 );
 
 wire        sdram2_ready;
-// V9990 VRAM (misc/v9990_vram_sdram.sv, below)
+// V9990 VRAM (misc/v9990_vram_sdram.sv, below): reads are lines of 4 words
 wire        v99_s_req, v99_s_ack, v99_s_we;
 wire  [1:0] v99_s_be;
 wire [23:0] v99_s_addr;
-wire [15:0] v99_s_din, v99_s_dout;
+wire [15:0] v99_s_din;
+wire [63:0] v99_s_dout;
 
 sdram2 sdram2
 (
@@ -368,11 +372,14 @@ assign wave_rdat   = 16'hFFFF;
 
 //////////////////   V9990 (GFX9000), SiDi128   ///////////////////
 // v9990/rtl/v9990_core on clk_v99 (42.95 MHz), ports 60h-6Fh from emsx_top
-// (misc/v9990_bus.vhd), its VRAM in bank 2 of the 2nd SDRAM (port 1 of sdram2,
-// misc/v9990_vram_sdram.sv).  Video: not used yet (ZEMMIX-1os.6).
+// (misc/v9990_bus.vhd), its VRAM in bank 2 of the 2nd SDRAM (port 1 of sdram2)
+// through a cache of 4-word lines (v9990/rtl/v9990_vram_cache.vhd,
+// misc/v9990_vram_sdram.sv).  Video: to the mist_video chain (VIDEO, below).
 wire        v99_reset_n, v99_req, v99_wrt, v99_ack, v99_int_n;
 wire  [3:0] v99_adr;
 wire  [7:0] v99_dbo, v99_dbi;
+wire  [7:0] v99_red, v99_grn, v99_blu;
+wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp;
 
 `ifdef V9990
 wire        v99_vram_req, v99_vram_we;
@@ -381,16 +388,44 @@ wire [17:0] v99_vram_addr;
 wire [15:0] v99_vram_wdata, v99_vram_rdata;
 wire        v99_vram_ack;
 
+wire        v99_m_req, v99_m_we, v99_m_ack;
+wire  [1:0] v99_m_be;
+wire [17:0] v99_m_addr;
+wire [15:0] v99_m_wdata;
+wire [63:0] v99_m_rdata;
+
+// not reset with the V9990: an access cut short would get the ack of the
+// next one (the VRAM changes only through it, the lines stay right)
+v9990_vram_cache #(.LINES(4)) v9990_cache
+(
+	.clk     ( clk_v99        ),
+	.reset_n ( 1'b1           ),
+	.req     ( v99_vram_req   ),
+	.we      ( v99_vram_we    ),
+	.be      ( v99_vram_be    ),
+	.addr    ( v99_vram_addr  ),
+	.wdata   ( v99_vram_wdata ),
+	.ack     ( v99_vram_ack   ),
+	.rdata   ( v99_vram_rdata ),
+	.m_req   ( v99_m_req      ),
+	.m_we    ( v99_m_we       ),
+	.m_be    ( v99_m_be       ),
+	.m_addr  ( v99_m_addr     ),
+	.m_wdata ( v99_m_wdata    ),
+	.m_ack   ( v99_m_ack      ),
+	.m_rdata ( v99_m_rdata    )
+);
+
 v9990_vram_sdram v9990_vram
 (
 	.clk    ( clk_v99        ),
-	.req    ( v99_vram_req   ),
-	.we     ( v99_vram_we    ),
-	.be     ( v99_vram_be    ),
-	.addr   ( v99_vram_addr  ),
-	.wdata  ( v99_vram_wdata ),
-	.ack    ( v99_vram_ack   ),
-	.rdata  ( v99_vram_rdata ),
+	.req    ( v99_m_req      ),
+	.we     ( v99_m_we       ),
+	.be     ( v99_m_be       ),
+	.addr   ( v99_m_addr     ),
+	.wdata  ( v99_m_wdata    ),
+	.ack    ( v99_m_ack      ),
+	.rdata  ( v99_m_rdata    ),
 	.s_req  ( v99_s_req      ),
 	.s_ack  ( v99_s_ack      ),
 	.s_we   ( v99_s_we       ),
@@ -421,14 +456,15 @@ v9990_core v9990
 	.vram_ack_i   ( v99_vram_ack    ),
 	.vram_rdata_i ( v99_vram_rdata  ),
 
-	.red_o        (                 ),
-	.grn_o        (                 ),
-	.blu_o        (                 ),
-	.hsync_n_o    (                 ),
-	.vsync_n_o    (                 ),
-	.hblank_o     (                 ),
-	.vblank_o     (                 ),
+	.red_o        ( v99_red         ),
+	.grn_o        ( v99_grn         ),
+	.blu_o        ( v99_blu         ),
+	.hsync_n_o    ( v99_hsync_n     ),
+	.vsync_n_o    ( v99_vsync_n     ),
+	.hblank_o     ( v99_hblank      ),
+	.vblank_o     ( v99_vblank      ),
 	.interlace_o  (                 ),
+	.disp_en_o    ( v99_disp        ),
 	.vid_x_o      (                 ),
 	.vid_y_o      (                 )
 );
@@ -987,6 +1023,45 @@ audiodac_r(
 
 //////////////////   VIDEO   //////////////////
 
+// Source: the V9958 of emsx_top or the V9990 (OSD, V9990 builds).  Auto: the
+// V9990 while its display is on (R#8 DISP), else the V9958.  Both give 15 kHz
+// lines of 1368 clk_sys; clk_v99 is clk_sys x2 from the same PLL and in phase,
+// so the V9990 outputs are just registered on clk_sys.  Sampled at clk_sys/2
+// (ce_divider 1): exact for P1, P2, B0, B1 and B3, B2 / B4 / B7 lose pixels.
+wire  [5:0] vid_r, vid_g, vid_b;
+wire        vid_hs, vid_vs, vid_blank;
+
+`ifdef V9990
+reg   [5:0] v99_r, v99_g, v99_b;
+reg         v99_hs, v99_vs, v99_blank, v99_on;
+
+always @(posedge clk_sys) begin
+	v99_r     <= v99_red[7:2];
+	v99_g     <= v99_grn[7:2];
+	v99_b     <= v99_blu[7:2];
+	v99_hs    <= v99_hsync_n;
+	v99_vs    <= v99_vsync_n;
+	v99_blank <= v99_hblank | v99_vblank;
+	v99_on    <= v99_disp;
+end
+
+wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
+
+assign vid_r     = vid_v99 ? v99_r     : R_O;
+assign vid_g     = vid_v99 ? v99_g     : G_O;
+assign vid_b     = vid_v99 ? v99_b     : B_O;
+assign vid_hs    = vid_v99 ? v99_hs    : HSync;
+assign vid_vs    = vid_v99 ? v99_vs    : VSync;
+assign vid_blank = vid_v99 ? v99_blank : blank;
+`else
+assign vid_r     = R_O;
+assign vid_g     = G_O;
+assign vid_b     = B_O;
+assign vid_hs    = HSync;
+assign vid_vs    = VSync;
+assign vid_blank = blank;
+`endif
+
 wire isVGA = status[2];
 
 mist_video #(
@@ -1002,11 +1077,11 @@ mist_video
 	.SPI_SCK      (SPI_SCK    ),
 	.SPI_SS3      (SPI_SS3    ),
 	.SPI_DI       (SPI_DI     ),
-	.R            (R_O ),
-	.G            (G_O ),
-	.B            (B_O ),
-	.HSync        (HSync),
-	.VSync        (VSync),
+	.R            (vid_r ),
+	.G            (vid_g ),
+	.B            (vid_b ),
+	.HSync        (vid_hs),
+	.VSync        (vid_vs),
 	.VGA_R        (VGA_R      ),
 	.VGA_G        (VGA_G      ),
 	.VGA_B        (VGA_B      ),
@@ -1062,13 +1137,13 @@ hdmi_video (
 	.ypbpr       ( 1'b0       ),
 	.rotate      ( 2'b00      ),
 	.blend       ( 1'b0       ),
-	.R           (R_O),
-	.G           (G_O),
-	.B           (B_O),
-	.HBlank      ( blank       ),                // F18A: H+V blank, held high on vblank lines
-	.VBlank      ( ~VSync      ),                // F18A: frame start for the OSD (vertical sync, active high)
-	.HSync       ( HSync       ),
-	.VSync       ( VSync       ),
+	.R           (vid_r),
+	.G           (vid_g),
+	.B           (vid_b),
+	.HBlank      ( vid_blank   ),                // F18A: H+V blank, held high on vblank lines
+	.VBlank      ( ~vid_vs     ),                // F18A: frame start for the OSD (vertical sync, active high)
+	.HSync       ( vid_hs      ),
+	.VSync       ( vid_vs      ),
 	.VGA_R       ( HDMI_R      ),
 	.VGA_G       ( HDMI_G      ),
 	.VGA_B       ( HDMI_B      ),

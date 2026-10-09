@@ -10,6 +10,11 @@
 // the write recovery + precharge of the auto precharge all fit), a refresh
 // every 7 us that takes 7 memclk.  Banks are not interleaved.
 //
+// Reads of port 1 (the V9990 VRAM cache, v9990/rtl/v9990_vram_cache.vhd)
+// are lines of 4 words: addr with bits 1-0 at 0, 4 READ one after the
+// other in the open row, the last one with auto precharge; p1_dout has
+// the 4 words (word 0 in bits 15-0).  9 memclk to the next ACT.
+//
 // Address: 16-bit words, {bank[1:0], row[12:0], col[8:0]} = 32 MB.  A chip
 // with 10 column bits works as well (A9 is 0: half of each row is used).
 //
@@ -45,7 +50,7 @@ module sdram2 #(
 	input      [1:0]  p1_be,
 	input     [23:0]  p1_addr,
 	input     [15:0]  p1_din,
-	output reg [15:0] p1_dout,
+	output reg [63:0] p1_dout,
 
 	output reg [12:0] SDRAM_A,
 	inout      [15:0] SDRAM_DQ,
@@ -89,15 +94,18 @@ reg  [3:0] init_step = 4'd0;           // 0 precharge all, 1-8 refresh, 9 mode, 
 reg  [9:0] ref_cnt = 10'd0;
 reg        ref_due = 1'b0;
 
-reg  [2:0] busy = 3'd0;                // memclk left before the next command
+reg  [3:0] busy = 4'd0;                // memclk left before the next command
 reg  [1:0] step = 2'd0;                // access: 2 ACT given, 1 READ / WRITE now
+reg  [1:0] brst = 2'd0;                // line read: READs left after the first
 reg  [1:0] inflight = 2'b00;           // ports with an access given and not acked
 reg        acc_port, acc_we, last_port = 1'b1;
 reg  [1:0] acc_be;
+wire       line = acc_port & ~acc_we;      // port 1 reads: lines
 reg  [8:0] acc_col;
 reg [15:0] acc_din;
 reg [RD_DELAY:0] rd_pipe = 0;          // a READ RD_DELAY + 1 memclk ago: [RD_DELAY]
 reg [RD_DELAY:0] rd_port = 0;
+reg [RD_DELAY:0] rd_last = 0;          // the last READ of an access
 
 wire p0_pend = (p0_req ^ p0_ack) & ~inflight[0];
 wire p1_pend = (p1_req ^ p1_ack) & ~inflight[1];
@@ -111,23 +119,28 @@ always @(posedge clk) begin
 
 	cmd   <= CMD_NOP;
 	dq_oe <= 1'b0;
-	if (busy != 3'd0) busy <= busy - 1'd1;
+	if (busy != 4'd0) busy <= busy - 1'd1;
 	if (step != 2'd0) step <= step - 1'd1;
 
 	// read data: taken from the pins RD_DELAY memclk after READ
 	rd_pipe <= {rd_pipe[RD_DELAY-1:0], 1'b0};
 	rd_port <= {rd_port[RD_DELAY-1:0], acc_port};
+	rd_last <= {rd_last[RD_DELAY-1:0], 1'b0};
 	if (rd_pipe[RD_DELAY]) begin
-		if (rd_port[RD_DELAY]) begin p1_dout <= dq_in; p1_ack <= p1_req; inflight[1] <= 1'b0; end
-		else                   begin p0_dout <= dq_in; p0_ack <= p0_req; inflight[0] <= 1'b0; end
+		if (rd_port[RD_DELAY]) begin
+			p1_dout <= {dq_in, p1_dout[63:16]};           // 4 words: word 0 ends in 15-0
+			if (rd_last[RD_DELAY]) begin p1_ack <= p1_req; inflight[1] <= 1'b0; end
+		end
+		else begin p0_dout <= dq_in; p0_ack <= p0_req; inflight[0] <= 1'b0; end
 	end
 
 	if (rst_s[1]) begin
 		ready     <= 1'b0;
 		wait_cnt  <= 15'd0;
 		init_step <= 4'd0;
-		busy      <= 3'd0;
+		busy      <= 4'd0;
 		step      <= 2'd0;
+		brst      <= 2'd0;
 		inflight  <= 2'b00;
 		rd_pipe   <= 0;                         // an access cut short is given again
 	end
@@ -135,44 +148,60 @@ always @(posedge clk) begin
 		// power on: 200 us, precharge all, 8 refresh, mode register
 		if (wait_cnt != INIT_WAIT[14:0])
 			wait_cnt <= wait_cnt + 1'd1;
-		else if (busy == 3'd0) begin
+		else if (busy == 4'd0) begin
 			init_step <= init_step + 1'd1;
 			if (init_step == 4'd0) begin
 				cmd     <= CMD_PRE;
 				SDRAM_A <= 13'h0400;               // A10: all banks
-				busy    <= 3'd2;
+				busy    <= 4'd2;
 			end else if (init_step <= 4'd8) begin
 				cmd  <= CMD_REF;
-				busy <= 3'd6;
+				busy <= 4'd6;
 			end else if (init_step == 4'd9) begin
 				cmd      <= CMD_MRS;
 				SDRAM_A  <= MODE;
 				SDRAM_BA <= 2'b00;
-				busy     <= 3'd2;
+				busy     <= 4'd2;
 			end else
 				ready <= 1'b1;                      // what was asked before is done now
 		end
 	end
 	else if (step == 2'd1) begin
-		// tRCD: READ / WRITE two memclk after ACT, auto precharge (A10)
+		// tRCD: READ / WRITE two memclk after ACT, auto precharge (A10); a
+		// line read of port 1: the first of 4 READ, without auto precharge
 		cmd        <= acc_we ? CMD_WR : CMD_RD;
-		SDRAM_A    <= {2'b00, 1'b1, 1'b0, acc_col};
+		SDRAM_A    <= {2'b00, ~line, 1'b0, acc_col};
 		SDRAM_DQML <= acc_we & ~acc_be[0];
 		SDRAM_DQMH <= acc_we & ~acc_be[1];
 		dq_out     <= acc_din;
 		dq_oe      <= acc_we;
-		if (!acc_we)
+		if (line) begin
+			brst    <= 2'd3;
+			acc_col <= acc_col + 1'd1;
+		end
+		if (!acc_we) begin
 			rd_pipe[0] <= 1'b1;
+			rd_last[0] <= ~line;
+		end
 		else if (acc_port) begin
 			p1_ack <= p1_req; inflight[1] <= 1'b0;
 		end else begin
 			p0_ack <= p0_req; inflight[0] <= 1'b0;
 		end
 	end
-	else if (busy == 3'd0) begin
+	else if (brst != 2'd0) begin
+		// the next READ of a line, the last one with auto precharge
+		cmd        <= CMD_RD;
+		SDRAM_A    <= {2'b00, brst == 2'd1, 1'b0, acc_col};
+		acc_col    <= acc_col + 1'd1;
+		brst       <= brst - 1'd1;
+		rd_pipe[0] <= 1'b1;
+		rd_last[0] <= brst == 2'd1;
+	end
+	else if (busy == 4'd0) begin
 		if (ref_due) begin
 			cmd  <= CMD_REF;
-			busy <= 3'd6;                           // tRFC: 7 memclk (81 ns)
+			busy <= 4'd6;                           // tRFC: 7 memclk (81 ns)
 		end else if (p0_pend | p1_pend) begin
 			acc_port  <= take1;
 			last_port <= take1;
@@ -185,12 +214,13 @@ always @(posedge clk) begin
 			SDRAM_BA  <= take1 ? p1_addr[23:22] : p0_addr[23:22];
 			cmd       <= CMD_ACT;
 			step      <= 2'd2;
-			busy      <= 3'd5;                      // tRC: next ACT 6 memclk later
+			// tRC: next ACT 6 memclk later; a line: 3 READ more, then tRP
+			busy      <= (take1 & ~p1_we) ? 4'd8 : 4'd5;
 		end
 	end
 
 	// refresh every 7 us (after the arbiter: a refresh given now clears it first)
-	if (ready && busy == 3'd0 && step == 2'd0 && ref_due && !rst_s[1])
+	if (ready && busy == 4'd0 && step == 2'd0 && brst == 2'd0 && ref_due && !rst_s[1])
 		ref_due <= 1'b0;
 	if (ref_cnt == REF_EVERY[9:0] - 1'd1) begin
 		ref_cnt <= 10'd0;

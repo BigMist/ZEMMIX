@@ -3,10 +3,11 @@
 // mode register) and returns read data with CAS latency 2 and the board
 // delay DLY, and two clients doing random reads / writes on their clocks
 // (p0 on memclk / 4 as the OPL4, p1 on memclk / 2 as the V9990), checked
-// against a copy of the memory.
+// against a copy of the memory.  The reads of p1 are lines of 4 words.
 //
-// ADAPTER = 1: p1 through misc/v9990_vram_sdram.sv, its client as the V9990
-// core (req held until ack, the next req right after), latency in clk_p1.
+// ADAPTER = 1: p1 through misc/v9990_vram_sdram.sv, its client as the VRAM
+// cache of the V9990 (req held until ack, the next req right after),
+// latency in clk_p1.
 //
 //   iverilog -g2012 -o sdram2_tb misc/sim/sdram2_tb.sv misc/sdram2.sv misc/v9990_vram_sdram.sv && vvp sdram2_tb
 //   (-Psdram2_tb.ADAPTER=1)
@@ -39,13 +40,14 @@ reg  [15:0] p0_din, p1_din;
 wire        p0_ack, p1_ack, p1_ack_s;
 wire  [1:0] s1_be;
 wire [23:0] s1_addr;
-wire [15:0] s1_din, p1_dout_s;
+wire [15:0] s1_din;
+wire [63:0] p1_dout_s;
 wire        s1_we;
 
 // the V9990 core side of the adapter
 reg         c_req = 0;
 wire        c_ack;
-wire [15:0] c_rdata;
+wire [63:0] c_rdata;
 
 generate if (ADAPTER) begin
 	v9990_vram_sdram adapter (
@@ -59,7 +61,7 @@ end else begin
 end endgenerate
 assign p1_ack = p1_ack_s;
 wire [15:0] p0_dout;
-wire [15:0] p1_dout = ADAPTER ? c_rdata : p1_dout_s;
+wire [63:0] p1_dout = ADAPTER ? c_rdata : p1_dout_s;
 
 wire [12:0] A;
 wire [15:0] DQ;
@@ -119,9 +121,10 @@ always @(negedge clk) begin
 	4'b0101, 4'b0100: begin // RD, WR
 		if (!open[BA]) begin errors++; $display("%t RD/WR bank %0d closed", $time, BA); end
 		if (cyc - act_at[BA] < 2) begin errors++; $display("%t tRCD", $time); end
-		if (!A[10]) begin errors++; $display("%t no auto precharge", $time); end
+		// reads of a line: the bank stays open until the READ with A10
+		if (!A[10] && c == 4'b0100) begin errors++; $display("%t write without auto precharge", $time); end
 		if (row[BA] > 15) begin errors++; $display("%t row %0d out of the model", $time, row[BA]); end
-		open[BA] = 0;
+		if (A[10]) open[BA] = 0;
 		if (c == 4'b0100) begin
 			if (!DQML) mem[idx(BA, row[BA], A[8:0])][7:0]  = DQ[7:0];
 			if (!DQMH) mem[idx(BA, row[BA], A[8:0])][15:8] = DQ[15:8];
@@ -172,6 +175,13 @@ function [23:0] raddr(input integer port);
 		raddr = a;
 	end
 endfunction
+// a line of p1 (4 words) as ref_mem has it
+function [63:0] rline(input [23:0] a);
+	begin
+		rline = {ref_mem[ri({a[23:2], 2'd3})], ref_mem[ri({a[23:2], 2'd2})],
+		         ref_mem[ri({a[23:2], 2'd1})], ref_mem[ri({a[23:2], 2'd0})]};
+	end
+endfunction
 function integer ri(input [23:0] a);
 	ri = idx(a[23:22], a[21:9], a[8:0]);
 endfunction
@@ -214,13 +224,14 @@ endtask
 task automatic client1;
 	integer k;
 	time t;
-	reg [15:0] exp;
+	reg [63:0] exp;
 	begin
 		for (k = 0; k < N; k = k + 1) begin
 			@(posedge clk_p1);
 			#1;                     // as a flip-flop: after the edge
 			p1_addr = raddr(1);
-			p1_we   = ($urandom % 3) == 0 || ref_mem[ri(p1_addr)] === 16'hxxxx;
+			p1_we   = ($urandom % 3) == 0 || rline(p1_addr) === 64'hx;
+			if (!p1_we) p1_addr[1:0] = 2'd0;                  // reads: lines
 			p1_be   = p1_we ? (1 + $urandom % 3) : 2'b11;
 			p1_din  = $urandom;
 			t = $time;
@@ -239,9 +250,9 @@ task automatic client1;
 				if (p1_be[0]) ref_mem[ri(p1_addr)][7:0]  = p1_din[7:0];
 				if (p1_be[1]) ref_mem[ri(p1_addr)][15:8] = p1_din[15:8];
 			end else begin
-				exp = ref_mem[ri(p1_addr)];
+				exp = rline(p1_addr);
 				rd1 = rd1 + 1;
-				for (int b = 0; b < 16; b++)
+				for (int b = 0; b < 64; b++)
 					if (exp[b] !== 1'bx && exp[b] !== p1_dout[b]) begin
 						errors++; $display("%t p1 read %h: %h, expected %h", $time, p1_addr, p1_dout, exp); break;
 					end
