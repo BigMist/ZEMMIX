@@ -1207,6 +1207,7 @@ architecture RTL of emsx_top is
 
     -- Sound output, toggle keys
     signal  vFKeys          : std_logic_vector(  7 downto 0 );
+    signal  FKeys_sw        : std_logic_vector(  7 downto 0 );                       -- Fkeys for swioports, without F12
     signal  ff_Scro         : std_logic;
     signal  ff_Reso         : std_logic;
 
@@ -2731,6 +2732,12 @@ begin
         end if;
     end process;
 
+    -- F12 opens the OSD of the MiST / SiDi: its press can reach the core, and in
+    -- swioports F12 steps the CPU speed (3.58 > 5.37 > custom > 3.58) and
+    -- SHIFT+F12 the slot 1, so every OSD opening changed the speed.  swioports
+    -- does not see F12 (the speed is in the OSD); LCTRL+F12 resets still work.
+    FKeys_sw <= Fkeys(7 downto 1) & vFkeys(0);
+
 
     -- Cassette Magnetic Tape (CMT) interface
     CmtIn   <= null                                         when( power_on_reset = '0' )else
@@ -3570,7 +3577,7 @@ begin
             ff_Scro         => ff_Scro          ,
             Reso            => Reso             ,
             ff_Reso         => ff_Reso          ,
-            FKeys           => FKeys            ,
+            FKeys           => FKeys_sw         ,
             vFKeys          => vFKeys           ,
             LevCtrl         => LevCtrl          ,
             GreenLvEna      => GreenLvEna       ,
