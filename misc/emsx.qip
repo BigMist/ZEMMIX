@@ -26,7 +26,7 @@ set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) msx_psg.vh
 #set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/opll/vm2413/voicememory.vhd]
 #set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/opll/vm2413/voicerom.vhd]
 #set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) opll/eseopll.vhd]
-set_global_assignment -name QIP_FILE [file join $::quartus(qip_path) nopll/nopll.qip]
+set_global_assignment -name QIP_FILE [file join $::quartus(qip_path) ikaopll/ikaopll.qip]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/lpf/lpf.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/filter/esefir5.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/filter/tapram.vhd]

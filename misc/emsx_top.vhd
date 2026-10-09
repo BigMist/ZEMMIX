@@ -3441,8 +3441,9 @@ begin
 
     U32 : eseopll
         port map(clk21m, reset, clkena, OpllEnaWait, OpllReq, OpllAck, wrt, adr, dbo, OpllWav);
-    -- OPLL wait enabler
-    OpllEnaWait <= ff_clksel xnor ff_clksel5m_n;
+    -- OPLL wait enabler: the turbo Z80 clocks and the R800 (the 3.58MHz Z80
+    -- software waits by itself)
+    OpllEnaWait <= (ff_clksel xnor ff_clksel5m_n) or r8_owner;
 
 
 
