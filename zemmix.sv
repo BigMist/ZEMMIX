@@ -358,7 +358,6 @@ user_io #(.STRLEN($size(CONF_STR)>>3), .PS2DIV(800), .FEATURES(32'h0 | (BIG_OSD 
 	.sd_ack_conf(sd_ack_conf),
 	.sd_sdhc(sd_sdhc),
 	.sd_lba(sd_lba),
-	.sd_cnt(8'd1),                        // one sector per transfer (sd_card.v)
 	.leds(8'd0),                          // keyboard LEDs to the firmware: not used
 	.sd_rd(sd_rd),
 	.sd_wr(sd_wr),
