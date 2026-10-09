@@ -52,6 +52,8 @@ entity emsx_top is
         use_opl3_g      : boolean   := true;
         opl3_fpga_g     : boolean   := false;                           -- OPL3: false = opl3sw (Next186), true = opl3_fpga (Greg Taylor, clk_opl = 50MHz)
         use_opl4_g      : boolean   := false;                           -- OPL4 wave part (MoonSound: FM C4-C7h + wave 7E-7Fh), needs opl3_fpga_g and clk_opl = 50MHz
+        opl4_wave_ext_g : boolean   := false;                           -- OPL4 wave memory outside (2nd SDRAM), not in the top 4 MB of the SDRAM
+        use_v9990_g     : boolean   := false;                           -- V9990 (GFX9000): ports 60h-6Fh, VRAM outside (2nd SDRAM)
         use_dualpsg_g   : boolean   := true;
         psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
         opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz

@@ -172,25 +172,12 @@ localparam bit BIG_OSD = 0;
 `define SEP
 `endif
 
-// remove this if the 2nd chip is actually used
-`ifdef DUAL_SDRAM
-assign SDRAM2_A = 13'hZZZZ;
-assign SDRAM2_BA = 0;
-assign SDRAM2_DQML = 0;
-assign SDRAM2_DQMH = 0;
-assign SDRAM2_CKE = 0;
-assign SDRAM2_CLK = 0;
-assign SDRAM2_nCS = 1;
-assign SDRAM2_DQ = 16'hZZZZ;
-assign SDRAM2_nCAS = 1;
-assign SDRAM2_nRAS = 1;
-assign SDRAM2_nWE = 1;
-`endif
-
 `include "build_id.v"
 
-// remove this if the 2nd chip is actually used
+// 2nd SDRAM (SiDi128 only): the OPL4 wave memory and the V9990 VRAM.  Unused
+// until its controller is there (ZEMMIX-1os.2).
 `ifdef DUAL_SDRAM
+localparam SDRAM2 = "true";
 assign SDRAM2_A = 13'hZZZZ;
 assign SDRAM2_BA = 0;
 assign SDRAM2_DQML = 0;
@@ -202,6 +189,18 @@ assign SDRAM2_DQ = 16'hZZZZ;
 assign SDRAM2_nCAS = 1;
 assign SDRAM2_nRAS = 1;
 assign SDRAM2_nWE = 1;
+`else
+localparam SDRAM2 = "false";
+`endif
+
+// V9990 (GFX9000, ports 60h-6Fh): its 512 KB VRAM is in the 2nd SDRAM
+`ifdef V9990
+`ifndef DUAL_SDRAM
+v9990_needs_DUAL_SDRAM v9990_needs_DUAL_SDRAM();   // no such module: build error
+`endif
+localparam V9990 = "true";
+`else
+localparam V9990 = "false";
 `endif
 
 `ifdef USE_HDMI
@@ -576,6 +575,8 @@ emsx_top #(
     .use_opl3_g(true),  // false. cambiar a true para activar OPL3
     .opl3_fpga_g(OPL3_FPGA),
     .use_opl4_g(OPL3_FPGA),    // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
+    .opl4_wave_ext_g(SDRAM2),  // OPL4 wave memory in the 2nd SDRAM instead of the top 4 MB of the SDRAM
+    .use_v9990_g(V9990),       // V9990 (GFX9000), ports 60h-6Fh
     .use_dualpsg_g(false),// activar doble chip PSG
     .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
     .opl3_clk_g(OPL3_CLK)
