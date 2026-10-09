@@ -1,6 +1,6 @@
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/video/vdp_package.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/video/vencode.vhd]
-set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/scc/megaram.vhd]
+set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) megaram.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/scc/scc_wave.vhd]
 #set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/psg/psg.vhd]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) ay_ym_psg.v]
