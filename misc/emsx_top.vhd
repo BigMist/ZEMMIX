@@ -432,6 +432,7 @@ architecture RTL of emsx_top is
             adr             : in    std_logic_vector( 15 downto 0 );
             dbi             : out   std_logic_vector(  7 downto 0 );
             dbo             : in    std_logic_vector(  7 downto 0 );
+            cyc             : in    std_logic;
 
             ramreq          : out   std_logic;
             ramadr          : out   std_logic_vector( 17 downto 0 );
@@ -1040,6 +1041,8 @@ architecture RTL of emsx_top is
 
     -- Kanji signals
     signal  KanReq          : std_logic;
+    signal  kan_cyc         : std_logic;                                            -- I/O cycle on D8-DBh (misc/kanji.vhd)
+    signal  kan_rd          : std_logic;                                            -- a read of D9h / DBh: the font byte from the SDRAM
     signal  KanDbi          : std_logic_vector(  7 downto 0 );
     signal  KanRom          : std_logic;
     signal  KanAdr          : std_logic_vector( 17 downto 0 );
@@ -2085,6 +2088,8 @@ begin
                 end if;
             elsif( mem = '1' and ((iSltMap0 or iSltMap or rom_main or rom_opll or rom_extd or rom_xbas or rom_free or iSltLin1 or iSltLin2) = '1') )then
                 jSltMem <= '1';
+            elsif( mem = '0' and adr(7 downto 2) = "110110" and adr(0) = '1' )then  -- Kanji-data D9h / DBh: the byte read now (ZEMMIX-cb8)
+                jSltMem <= '1';
             else
                 jSltMem <= '0';
             end if;
@@ -2307,6 +2312,7 @@ begin
                 '0' when( (rc_io = '1' or (rc_rd = '1' and (jSltMem = '0' or jSltScc1 = '1' or jSltScc2 = '1'))) and rc_cnt < "011" )else
                 '0' when( rc_io = '1' and opl4_wait_n = '0' )else                     -- OPL4: IN 7Fh until its data is there
                 '0' when( rc_io = '1' and v99_wait_n = '0' )else                      -- V9990: until it has taken / given the byte
+                '0' when( kan_rd = '1' and not (sdr_rd_ok = '1' and sdr_rd_adr = CpuAdr) )else  -- Kanji font: until the SDRAM read of the pointer
                 '1';
 
     -- a device that ends its wait on edge W gives its data in dlydbi on edge W+1: the R800
@@ -3393,8 +3399,10 @@ begin
         port map(clk21m, '0', rtcena, RtcReq, open, wrt, adr, RtcDbi, dbo);
 
     U08 : kanji
-        port map(clk21m, reset, KanReq, open, wrt, adr, KanDbi, dbo,
+        port map(clk21m, reset, KanReq, open, wrt, adr, KanDbi, dbo, kan_cyc,
                         KanRom, KanAdr, RamDbi, open);
+    kan_cyc <= '1' when( iSltIorq_n = '0' and adr(7 downto 2) = "110110" )else '0';
+    kan_rd  <= '1' when( rc_io = '1' and mem = '0' and adr(7 downto 2) = "110110" and adr(0) = '1' and wrt = '0' )else '0';
 
     U20 : vdp
         -- V9938 VDP core
