@@ -172,6 +172,8 @@ end
 // end
 //end
 
+wire [15:0] opl_l, opl_r;
+
 opl3sw #(OPLCLK) opl3
 (
     .reset(~rst_n),
@@ -182,9 +184,37 @@ opl3sw #(OPLCLK) opl3
     .wr(write),
 
     .clk(clk_opl),
-    .left(sample_l),
-    .right(sample_r)
+    .left(opl_l),
+    .right(opl_r)
 );
+
+// Samples from clk_opl to clk (not related when clk_opl is CLOCK_50): taken
+// every 64 clk_opl cycles with a toggle, copied when the synchronized toggle
+// changes (the hold registers are stable for 64 clk_opl cycles then).
+reg  [15:0] hold_l, hold_r;
+reg   [5:0] hold_cnt = 0;
+reg         hold_toggle = 0;
+always @(posedge clk_opl) begin
+    hold_cnt <= hold_cnt + 1'd1;
+    if(hold_cnt == 0) begin
+        hold_l      <= opl_l;
+        hold_r      <= opl_r;
+        hold_toggle <= ~hold_toggle;
+    end
+end
+
+reg   [2:0] toggle_sync = 0;
+reg  [15:0] out_l = 0, out_r = 0;
+always @(posedge clk) begin
+    toggle_sync <= {toggle_sync[1:0], hold_toggle};
+    if(toggle_sync[2] ^ toggle_sync[1]) begin
+        out_l <= hold_l;
+        out_r <= hold_r;
+    end
+end
+
+assign sample_l = out_l;
+assign sample_r = out_r;
 
 endmodule
 

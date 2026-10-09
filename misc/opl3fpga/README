@@ -1,0 +1,13 @@
+OPL3 FPGA by Greg Taylor, https://github.com/gtaylormb/opl3_fpga (commit 491a4dc, 2025-09-21)
+LGPL-3.0-or-later (COPYING.LESSER); afifo.v is (C) Gisselquist Technology, GPL-3.0.
+
+Changes for ZEMMIX:
+- module opl3 renamed to opl3fpga (opl3fpga.sv) and timer to opl3fpga_timer: the
+  names clash with misc/opl3/opl3.sv
+- opl3_pkg.sv: CLK_FREQ 50e6 (CLOCK_50), CLK_DIV_COUNT 1006 (49.702kHz), 16-bit
+  output, timers on, samples synchronized to clk_dac
+- timer ticks as integer clk counts (TIMER1_TICK_COUNT / TIMER2_TICK_COUNT)
+- timers.sv: reg 04h with D7 = 1 only resets the flags (as the real chip)
+- host_if.sv: status on C4h and C6h; opl3fpga_msx.sv: FM registers read back on
+  C5h / C7h (YMF278B, MoonSound detection)
+- opl3fpga_msx.sv: wrapper with the ports of misc/opl3/opl3.sv

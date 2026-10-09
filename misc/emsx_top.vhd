@@ -50,12 +50,19 @@ entity emsx_top is
         use_wifi_g      : boolean   := true;
         use_midi_g      : boolean   := true;
         use_opl3_g      : boolean   := true;
-        use_dualpsg_g   : boolean   := true
+        opl3_fpga_g     : boolean   := false;                           -- OPL3: false = opl3sw (Next186), true = opl3_fpga (Greg Taylor, clk_opl = 50MHz)
+        use_opl4_g      : boolean   := false;                           -- OPL4 wave part (MoonSound: FM C4-C7h + wave 7E-7Fh), needs opl3_fpga_g and clk_opl = 50MHz
+        opl4_wave_ext_g : boolean   := false;                           -- OPL4 wave memory outside (2nd SDRAM), not in the top 4 MB of the SDRAM
+        use_v9990_g     : boolean   := false;                           -- V9990 (GFX9000): ports 60h-6Fh, VRAM outside (2nd SDRAM)
+        use_dualpsg_g   : boolean   := true;
+        psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
+        opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz
     );
     port(
         -- Clock, Reset ports
         Clk21m          : in    std_logic;                                      -- VDP Clock ... 21.48MHz
 		  memclk          : in    std_logic;
+		  clk_opl         : in    std_logic;                            -- OPL3 clock (opl3_clk_g Hz)
         pExtClk         : in    std_logic;                                      -- Reserved (for multi FPGAs)
         pCpuClk         : out   std_logic;                                      -- CPU Clock ... 3.58MHz (up to 10.74MHz/21.48MHz)
         reset           : inout std_logic;
@@ -174,15 +181,48 @@ entity emsx_top is
         vga_scanlines   : inout std_logic_vector(  1 downto 0 );
 		  opl3_l         : out std_logic_vector(15 downto 0 );
 		  opl3_r         : out std_logic_vector(15 downto 0 );
+		  opl4_l         : out std_logic_vector(15 downto 0 );         -- OPL4 wave (PCM)
+		  opl4_r         : out std_logic_vector(15 downto 0 );
 		  opll_o         : out std_logic_vector(15 downto 0 );
 		  scc1_l         : out std_logic_vector(14 downto 0 );
 		  scc1_r         : out std_logic_vector(14 downto 0 );
  		  scc2_l         : out std_logic_vector(14 downto 0 );
 		  scc2_r         : out std_logic_vector(14 downto 0 );
-		  psg_o          : out std_logic_vector( 8 downto 0 );
+		  psg_o          : out std_logic_vector( 15 downto 0 );     -- PSG + PSG2 + key click, unsigned 0..26618
         TrPcm_o        : out std_logic_vector( 7 downto 0 );
-		  Vol_o          : out std_logic_vector( 2 downto 0 );
-        btn_scan       : in    std_logic
+		  Vol_o          : out std_logic_vector( 2 downto 0 );      -- MstrVol
+		  PsgVol_o       : out std_logic_vector( 2 downto 0 );
+		  SccVol_o       : out std_logic_vector( 2 downto 0 );
+		  OpllVol_o      : out std_logic_vector( 2 downto 0 );
+        btn_scan       : in    std_logic;
+
+        -- OSD: MoonSound (OPL3 + OPL4) on
+        opl_on_i       : in    std_logic := '1';
+
+        -- ZEMMIX.ROM (YRW801) from data_io index 0, to the OPL4 wave memory
+        rom_dl_i       : in    std_logic := '0';
+        rom_wr_i       : in    std_logic := '0';
+        rom_dat_i      : in    std_logic_vector(  7 downto 0 ) := (others => '0');
+
+        -- OPL4 wave memory outside (opl4_wave_ext_g, 2nd SDRAM of the SiDi128): byte
+        -- address, wave_rdat the 16-bit word (adr(0) = 1: high byte); done when equal to req
+        wave_ext_req_t  : out   std_logic;
+        wave_ext_done_t : in    std_logic := '0';
+        wave_ext_we     : out   std_logic;
+        wave_ext_adr    : out   std_logic_vector( 21 downto 0 );
+        wave_ext_wdat   : out   std_logic_vector(  7 downto 0 );
+        wave_ext_rdat   : in    std_logic_vector( 15 downto 0 ) := (others => '1');
+
+        -- V9990 (use_v9990_g): ports 60h-6Fh to the host bus of v9990_core (misc/v9990_bus.vhd)
+        v99_clk         : in    std_logic := '0';                               -- 42.95 MHz, same PLL as clk21m
+        v99_reset_n     : out   std_logic;
+        v99_req         : out   std_logic;
+        v99_wrt         : out   std_logic;
+        v99_adr         : out   std_logic_vector(  3 downto 0 );
+        v99_dbo         : out   std_logic_vector(  7 downto 0 );
+        v99_ack         : in    std_logic := '0';
+        v99_dbi         : in    std_logic_vector(  7 downto 0 ) := (others => '1');
+        v99_int_n       : in    std_logic := '1'
     );
 end emsx_top;
 
@@ -280,7 +320,6 @@ architecture RTL of emsx_top is
         port(
             clk21m      : in    std_logic;
             reset       : in    std_logic;
-            clkena      : in    std_logic;
             req         : in    std_logic;
             ack         : out   std_logic;
             mem         : in    std_logic;
@@ -387,7 +426,6 @@ architecture RTL of emsx_top is
         port(
             clk21m          : in    std_logic;
             reset           : in    std_logic;
-            clkena          : in    std_logic;
             req             : in    std_logic;
             ack             : out   std_logic;
             wrt             : in    std_logic;
@@ -451,7 +489,11 @@ architecture RTL of emsx_top is
             legacy_vga      : in    std_logic;
 
             VDP_ID          : in    std_logic_vector(  4 downto 0 );
-            OFFSET_Y        : in    std_logic_vector(  6 downto 0 )
+            OFFSET_Y        : in    std_logic_vector(  6 downto 0 );
+
+            wait_n          : out   std_logic;                           -- V9968: VRAM read in progress
+
+            busy            : out   std_logic                           -- V9968: a request is still running
         );
     end component;
 
@@ -470,7 +512,10 @@ architecture RTL of emsx_top is
         );
     end component;
 
-    component psg
+    component msx_psg
+        generic(
+            YM          : integer := 0
+        );
         port(
             clk21m      : in    std_logic;
             reset       : in    std_logic;
@@ -493,7 +538,7 @@ architecture RTL of emsx_top is
             cmtin       : in    std_logic;
             keymode     : in    std_logic;
 
-            wave        : out   std_logic_vector(  7 downto 0 )
+            wave        : out   std_logic_vector( 14 downto 0 )
         );
     end component;
 
@@ -556,6 +601,9 @@ architecture RTL of emsx_top is
 
     --  switched I/O ports
     component switched_io_ports
+        generic(
+            use_wifi_g      : boolean
+        );
         port(
             clk21m          : in    std_logic;
             reset           : in    std_logic;
@@ -566,45 +614,82 @@ architecture RTL of emsx_top is
             adr             : in    std_logic_vector( 15 downto 0 );
             dbi             : out   std_logic_vector(  7 downto 0 );
             dbo             : in    std_logic_vector(  7 downto 0 );
-            -- 'REGS' group
-            io40_n          : inout std_logic_vector(  7 downto 0 );            -- ID Manufacturers/Devices :   $08 (008), $D4 (212=1chipMSX), $FF (255=null)
+
+            io40_n          : inout std_logic_vector(  7 downto 0 );            -- ID Manufacturers/Devices :   $08 (008), $D4 (212=OCM ID, now MSX++ ID), $FF (255=null)
             io41_id212_n    : inout std_logic_vector(  7 downto 0 );            -- $41 ID212 states         :   Smart Commands
             io42_id212      : inout std_logic_vector(  7 downto 0 );            -- $42 ID212 states         :   Virtual DIP-SW states
-            io43_id212      : inout std_logic_vector(  7 downto 0 );            -- $43 ID212 states         :   Lock Mask for port $42 functions, OPL3 and reset key
-            io44_id212      : inout std_logic_vector(  7 downto 0 );            -- $44 ID212 states         :   Lights Mask have the green leds control when Lights Mode is On
-            OpllVol         : inout std_logic_vector(  2 downto 0 );            -- OPLL Volume
-            SccVol          : inout std_logic_vector(  2 downto 0 );            -- SCC-I Volume
+            io43_id212      : inout std_logic_vector(  7 downto 0 );            -- $43 ID212 states         :   Lock Mask for port $42 functions, CMT and System Reset
+            io44_id212      : inout std_logic_vector(  7 downto 0 );            -- $44 ID212 states         :   Lights Mask has the green leds control when Lights Mode is On
+
             PsgVol          : inout std_logic_vector(  2 downto 0 );            -- PSG Volume
             MstrVol         : inout std_logic_vector(  2 downto 0 );            -- Master Volume
+            OpllVol         : inout std_logic_vector(  2 downto 0 );            -- OPLL Volume
+            SccVol          : inout std_logic_vector(  2 downto 0 );            -- SCC-I Volume
+
             CustomSpeed     : inout std_logic_vector(  3 downto 0 );            -- Counter limiter of CPU wait control
             tMegaSD         : inout std_logic;                                  -- Turbo on MegaSD access   :   3.58MHz to 5.37MHz auto selection
             tPanaRedir      : inout std_logic;                                  -- tPana Redirection switch
             VdpSpeedMode    : inout std_logic;                                  -- VDP Speed Mode           :   0=Normal, 1=Fast
-            V9938_n         : inout std_logic;                                  -- VDP core installed       :   0=V9938, 1=TH9958
+            V9938_n         : in    std_logic;                                  -- VDP core installed       :   0=V9938, 1=TH9958
             Mapper_req      : inout std_logic;                                  -- Mapper req               :   Warm Reset is required to complete the request
             Mapper_ack      : out   std_logic;                                  -- Current Mapper state
             MegaSD_req      : inout std_logic;                                  -- MegaSD req               :   Warm Reset is required to complete the request
             MegaSD_ack      : out   std_logic;                                  -- Current MegaSD state
+
             io41_id008_n    : inout std_logic;                                  -- $41 ID008 BIT-0 state    :   0=5.37MHz, 1=3.58MHz (write_n only)
             swioKmap        : inout std_logic;                                  -- Keyboard layout selector
-            CmtScro         : inout std_logic;                                  -- Internal OPL3 state
-            swioCmt         : inout std_logic;                                  -- Internal OPL3 enabler    :   No toggle is required to use CMT in this firmware
+            CmtScro         : inout std_logic;                                  -- CMT state
+            swioCmt         : inout std_logic;                                  -- CMT enabler              :   This toggle is used for the Internal OPL3 on SM-X, SX-2 and SX-E
             LightsMode      : inout std_logic;                                  -- Custom green led states
             Red_sta         : inout std_logic;                                  -- Custom red led state
-            LastRst_sta     : inout std_logic;                                  -- Last reset state         :   0=Cold Reset, 1=Warm Reset (MSX2+) / 1=Cold Reset, 0=Warm Reset (MSXtR)
+            LastRst_sta     : inout std_logic;                                  -- Last reset state         :   0=F4 Cold Reset, 1=F4 Warm Reset (MSX2+) / 1=F4 Cold Reset, 0=F4 Warm Reset (MSXtR)
             RstReq_sta      : inout std_logic;                                  -- Reset request state      :   0=No, 1=Yes
             Blink_ena       : inout std_logic;                                  -- MegaSD blink led enabler
+
             pseudoStereo    : inout std_logic;                                  -- RCA-LEFT(red)=External Audio Card / RCA-RIGHT(white)=Internal Sounds
             extclk3m        : inout std_logic;                                  -- External Clock 3.58MHz   :   0=No, 1=Yes
             ntsc_pal_type   : inout std_logic;                                  -- NTSC/PAL Type            :   0=Forced, 1=Auto
             forced_v_mode   : inout std_logic;                                  -- Forced Video Mode        :   0=60Hz, 1=50Hz
-            right_inverse   : inout std_logic;                                  -- Right Inverse Audio      :   0=Off (Normal Wave), 1=On (Inverse Wave)
-            vram_slot_ids   : inout std_logic_vector(  7 downto 0 );            -- VRAM Slot IDs            :   MSB(4bits)=0-15 for Page 1, LSB(4bits)=0-15 for Page 0
-            DefKmap         : inout std_logic;                                  -- Default keyboard layout  :   0=JP, 1=Non-JP (BR, ES, FR, US, ...)
-            -- 'DIP-SW' group
+
+            right_inverse   : inout std_logic;                                  -- Right Inverse Audio      :   0=Off (normal wave), 1=On (inverse wave)
+            RatioMode       : inout std_logic_vector(  2 downto 0 );            -- Pixel Ratio 1:1 for LED Display (default is 0) (range 0-7) (60Hz only)
+            centerYJK_R25_n : inout std_logic;                                  -- Centering YJK Modes/R25 Mask (0=centered, 1=shifted to the right)
+            legacy_sel      : inout std_logic;                                  -- Legacy Output selector   :   0=Assigned to VGA, 1=Assigned to VGA+
+            iSlt1_linear    : inout std_logic;                                  -- Internal Slot1 Linear    :   0=Disabled, 1=Enabled
+            iSlt2_linear    : inout std_logic;                                  -- Internal Slot2 Linear    :   0=Disabled, 1=Enabled
+
+            btn_scan        : in    std_logic;                                  -- Scanlines button
+            vga_scanlines   : inout std_logic_vector(  1 downto 0 );            -- VGA Scanlines None, Light, Medium or Heavy (default is None)
+            iPsg2_ena       : inout std_logic;                                  -- Internal PSG2 enabler
+            SdrSize         : in    std_logic_vector(  1 downto 0 );            -- SDRAM size ID 0-3
+            bios_reload_ack : out   std_logic;                                  -- OCM-BIOS Reloading ack
+            Mapper0_req     : inout std_logic;                                  -- Extra-Mapper req         :   Warm Reset is required to complete the request
+            Slot0_req       : inout std_logic;                                  -- Slot0 Primary Mode req   :   Warm Reset is required to complete the request
+
+            xmr_ena         : inout std_logic;                                  -- Extended MegaROM Reading :   0=Off (default for compatibility), 1=On
+            SdrSizeAux      : in    std_logic_vector(  2 downto 0 );            -- Auxiliary SDRAM size ID 0-7
+            OFFSET_Y        : inout std_logic_vector(  6 downto 0 );            -- Vertical Offset ID 16-24
+
+            spMaxSpr        : inout std_logic;                                  -- Sprite Limit             :   0=4/8 (standard), 1=8/8 (enhanced)
+            vga_int_field   : inout std_logic;                                  -- VGA Interlace Field      :   0=Single (default), 1=Duplicate
+            low_scale_n     : in    std_logic;                                  -- VGA Scanlines variant    :   0=Low-Scale (0%|12%|25%|50%), 1=High-Scale (0%|25%|50%|75%)
+            cbios_mode      : inout std_logic;                                  -- C-BIOS Mode              :   0=Off (default), 1=On
+            Mapper0_ack     : inout std_logic;                                  -- Current Extra-Mapper state
+            Slot0Mode       : inout std_logic;                                  -- Current Slot0 state      :   0=Primary, 1=Expanded
+            safe_mode       : inout std_logic;                                  -- Safe Mode                :   0=Off (default), 1=On [Reserved for IPL-ROM]
+            portF2_ena      : inout std_logic;                                  -- F2 Device enabler
+
             ff_dip_req      : in    std_logic_vector(  7 downto 0 );            -- DIP-SW states/reqs
             ff_dip_ack      : inout std_logic_vector(  7 downto 0 );            -- DIP-SW acks
-            -- 'KEYS' group
+
+            vram_slot_ids   : inout std_logic_vector(  7 downto 0 );            -- VRAM Slot IDs            :   MSB(4bits)=0-15 for Page 1, LSB(4bits)=0-15 for Page 0
+            DefKmap         : inout std_logic;                                  -- Default keyboard layout  :   0=JP, 1=Non-JP (BR, ES, FR, IT, US, ...)
+
+            ff_ldbios_n     : in    std_logic;                                  -- OCM-BIOS loading status
+            VDP_ID          : out   std_logic_vector(  4 downto 0 );            -- VDP ID 0 (V9938) or VDP ID 2 (V9958)
+            JIS2_ena        : inout std_logic;                                  -- JIS2 enabler             :   0=JIS1 only (BIOS 384 KB), 1=JIS1+JIS2 (BIOS 512 KB)
+            portF4_mode     : inout std_logic;                                  -- F4 Device Mode           :   0=Inverted (MSX2+), 1=Normal (MSXtR)
+
             Scro            : in    std_logic;
             ff_Scro         : in    std_logic;
             Reso            : in    std_logic;
@@ -613,36 +698,12 @@ architecture RTL of emsx_top is
             vFKeys          : in    std_logic_vector(  7 downto 0 );
             LevCtrl         : inout std_logic_vector(  2 downto 0 );            -- Volume and high-speed level
             GreenLvEna      : out   std_logic;
-            -- 'RESET' group
-            cold_reset_comb : in    std_logic;                                  -- Cold Reset combination
-            warm_reset_comb : in    std_logic;                                  -- Warm Reset combination
+
             swioRESET_n     : inout std_logic;                                  -- Reset Pulse
             warmRESET       : inout std_logic;                                  -- 0=Cold Reset, 1=Warm Reset
             WarmMSXlogo     : inout std_logic;                                  -- Show MSX logo with Warm Reset
-            -- 'IPL-ROM' group
-            JIS2_ena        : inout std_logic;                                  -- JIS2 enabler             :   0=JIS1 only (BIOS 384 kB), 1=JIS1+JIS2 (BIOS 512 kB)
-            portF4_mode     : inout std_logic;                                  -- Port F4 mode             :   0=F4 Device Inverted (MSX2+), 1=F4 Device Normal (MSXtR)
-            ff_ldbios_n     : in    std_logic;                                  -- OCM-BIOS loading status
-            bios_reload_ack : out   std_logic;                                  -- OCM-BIOS Reloading ack
-            -- 'SPECIAL' group
-            RatioMode       : inout std_logic_vector(  2 downto 0 );            -- Pixel Ratio 1:1 for LED Display (default is 0) (range 0-7) (60Hz only)
-            centerYJK_R25_n : inout std_logic;                                  -- Centering YJK Modes/R25 Mask (0=centered, 1=shifted to the right)
-            legacy_sel      : inout std_logic;                                  -- Legacy Output selector   :   0=Assigned to VGA, 1=Assigned to VGA+
-            iSlt1_linear    : inout std_logic;                                  -- Internal Slot1 Linear    :   0=Disabled, 1=Enabled
-            iSlt2_linear    : inout std_logic;                                  -- Internal Slot2 Linear    :   0=Disabled, 1=Enabled
-            Slot0_req       : inout std_logic;                                  -- Slot0 Primary Mode req   :   Warm Reset is required to complete the request
-            Slot0Mode       : inout std_logic;                                  -- Current Slot0 state      :   0=Primary, 1=Expanded
-            vga_scanlines   : inout std_logic_vector(  1 downto 0 );            -- VGA Scanlines 0%, 25%, 50% or 75% (default is 0%)
-            btn_scan        : in    std_logic;                                  -- Scanlines button
-            Mapper0_req     : inout std_logic;                                  -- Extra-Mapper req         :   Warm Reset is required to complete the request
-            Mapper0_ack     : out   std_logic;                                  -- Current Extra-Mapper state
-            iPsg2_ena       : inout std_logic;                                  -- Internal PSG2 enabler
-            cbios_mode      : out   std_logic;                                  -- C-BIOS Mode              :  0=Off (default), 1=On
-            xmr_ena         : inout std_logic;                                  -- Extended MegaROM Reading :  0=Off (default for compatibility), 1=On
-            -- 'VARIABLES' group
-            SdrSize         : in    std_logic_vector(  1 downto 0 );
-            VDP_ID          : out   std_logic_vector(  4 downto 0 );
-            OFFSET_Y        : out   std_logic_vector(  6 downto 0 )
+            full_reset_comb : in    std_logic;                                  -- Full Reset combination
+            cold_reset_comb : in    std_logic                                   -- Cold Reset combination
         );
     end component;
 
@@ -664,6 +725,55 @@ architecture RTL of emsx_top is
     component opl3 is
         generic(
             OPLCLK          : integer := 64000000                               -- opl_clk in Hz
+        );
+        port(
+            clk             : in    std_logic;
+            clk_opl         : in    std_logic;
+            rst_n           : in    std_logic;
+            irq_n           : out   std_logic;
+
+            addr            : in    std_logic_vector(  1 downto 0 );
+            dout            : out   std_logic_vector(  7 downto 0 );
+            din             : in    std_logic_vector(  7 downto 0 );
+            we              : in    std_logic;
+            mono            : in    std_logic;
+
+            sample_l        : out   std_logic_vector( 15 downto 0 );
+            sample_r        : out   std_logic_vector( 15 downto 0 )
+         );
+    end component;
+
+    component opl4_wave is
+        port(
+            clk_bus         : in    std_logic;
+            reset_bus       : in    std_logic;
+            bus_cs          : in    std_logic;
+            bus_a           : in    std_logic_vector(  2 downto 0 );
+            bus_di          : in    std_logic_vector(  7 downto 0 );
+            bus_rd_n        : in    std_logic;
+            bus_wr_n        : in    std_logic;
+            bus_do          : out   std_logic_vector(  7 downto 0 );
+            bus_status      : out   std_logic_vector(  1 downto 0 );
+            bus_wait_n      : out   std_logic;
+            mem_req_t       : out   std_logic;
+            mem_done_t      : in    std_logic;
+            mem_we          : out   std_logic;
+            mem_adr         : out   std_logic_vector( 21 downto 0 );
+            mem_wdat        : out   std_logic_vector(  7 downto 0 );
+            mem_rdat        : in    std_logic_vector( 15 downto 0 );
+            pcm_l           : out   std_logic_vector( 15 downto 0 );
+            pcm_r           : out   std_logic_vector( 15 downto 0 );
+            dbg_wr          : in    std_logic_vector( 23 downto 0 );
+            dbg_flags       : in    std_logic_vector(  7 downto 0 );
+            dbg_rcv         : in    std_logic_vector( 23 downto 0 );
+            dbg_lost        : in    std_logic_vector( 23 downto 0 );
+            clk_eng         : in    std_logic
+        );
+    end component;
+
+    component opl3fpga_msx is
+        generic(
+            OPLCLK          : integer := 50000000                               -- opl_clk in Hz
         );
         port(
             clk             : in    std_logic;
@@ -737,7 +847,14 @@ architecture RTL of emsx_top is
     signal  LevCtrl         : std_logic_vector(  2 downto 0 );
     signal  GreenLvEna      : std_logic;
     signal  cold_reset_comb : std_logic;
-    signal  warm_reset_comb : std_logic;
+    signal  full_reset_comb : std_logic;
+    signal  comb_reset_n    : std_logic := '1';                                 -- reset by key combination (LCTRL+F12, LCTRL+SHIFT+F12)
+    signal  safe_mode       : std_logic := '0';
+    signal  portF2_ena      : std_logic := '1';
+    signal  low_scale_n     : std_logic := '1';                                 -- no VGA scanline variant here (mist_video)
+    signal  spMaxSpr        : std_logic;
+    signal  vga_int_field   : std_logic;
+    constant SdrSizeAux     : std_logic_vector(  2 downto 0 ) := "111";             -- n/a (default)
     signal  swioRESET_n     : std_logic := '1';
     signal  warmRESET       : std_logic := '0';
     signal  WarmMSXlogo     : std_logic;                                            -- here to reduce LEs
@@ -958,12 +1075,12 @@ architecture RTL of emsx_top is
     -- PSG signals
     signal  PsgReq          : std_logic;
     signal  PsgDbi          : std_logic_vector(  7 downto 0 );
-    signal  PsgAmp          : std_logic_vector(  7 downto 0 );
+    signal  PsgAmp          : std_logic_vector( 14 downto 0 );
 
     -- PSG2 signals
     signal  Psg2Req         : std_logic;
     signal  Psg2Dbi         : std_logic_vector(  7 downto 0 );
-    signal  Psg2Amp         : std_logic_vector(  7 downto 0 );
+    signal  Psg2Amp         : std_logic_vector( 14 downto 0 );
 
     -- SCC signals
     signal  Scc1Req         : std_logic;
@@ -1008,6 +1125,46 @@ architecture RTL of emsx_top is
     -- External memory signals
     signal  RamReq          : std_logic;
     signal  RamAck          : std_logic;
+
+    -- OPL4 wave memory in the SDRAM (cpu slots the cpu does not use)
+    signal  wave_req_t      : std_logic := '0';                                     -- request: toggles
+    signal  wave_done_t     : std_logic := '0';                                     -- done when equal to wave_req_t
+    signal  wave_we         : std_logic := '0';
+    signal  wave_adr        : std_logic_vector( 21 downto 0 ) := (others => '0');
+    signal  wave_wdat       : std_logic_vector(  7 downto 0 ) := (others => '0');
+    signal  wave_rdat       : std_logic_vector( 15 downto 0 ) := (others => '1');
+    signal  wave_sdr_adr    : std_logic_vector( 24 downto 0 );
+    signal  wave_pend       : std_logic;
+    signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
+    signal  wave_go         : std_logic;                                             -- wave_slot for this slot (cpu slot, or any during RstSeq)
+    signal  sdr_hold        : std_logic;                                             -- MSX reset or ZEMMIX.ROM download: the sequencer runs without the VDP
+    signal  sdr_wr_a0       : std_logic := '0';                                     -- byte of the cpu / wave write (taken at "001")
+    signal  CpuAdr_r        : std_logic_vector( 24 downto 0 ) := (others => '0');   -- CpuAdr registered in memclk (ZEMMIX-dl0)
+    signal  wave_wait       : std_logic_vector(  1 downto 0 ) := "00";               -- cpu slots waited (R800)
+    -- wave memory client before the ZEMMIX.ROM loader (7Eh/7Fh test, later the PCM engine)
+    signal  wt_req_t        : std_logic := '0';
+    signal  wt_done_t       : std_logic;
+    signal  wt_we           : std_logic := '0';
+    signal  wt_adr          : std_logic_vector( 21 downto 0 ) := (others => '0');
+    signal  wt_wdat         : std_logic_vector(  7 downto 0 ) := (others => '0');
+    signal  wt_rdat         : std_logic_vector( 15 downto 0 );
+    signal  romload_rcv     : std_logic_vector( 23 downto 0 );
+    signal  romload_lost    : std_logic_vector( 23 downto 0 );
+    signal  romload_wr      : std_logic_vector( 21 downto 0 );
+    signal  romload_wr24    : std_logic_vector( 23 downto 0 );
+    signal  romload_flags   : std_logic_vector(  7 downto 0 ) := (others => '0');   -- RstSeq at the start, a wave slot seen
+    signal  rom_dl_d        : std_logic := '0';
+    -- OPL4 wave part (MoonSound)
+    signal  opl4_cs         : std_logic;
+    signal  opl4_a          : std_logic_vector(  2 downto 0 );
+    signal  opl4_do         : std_logic_vector(  7 downto 0 ) := (others => '1');
+    signal  opl4_status     : std_logic_vector(  1 downto 0 ) := "00";
+    signal  opl4_wait_n     : std_logic := '1';
+    -- V9990 (GFX9000)
+    signal  v99_cs          : std_logic;
+    signal  v99_dbi_s       : std_logic_vector(  7 downto 0 ) := (others => '1');
+    signal  v99_wait_n      : std_logic := '1';
+    signal  v99_int_s       : std_logic := '1';
     signal  RamDbi          : std_logic_vector(  7 downto 0 );
     signal  CpuAdr          : std_logic_vector( 24 downto 0 );
 
@@ -1063,6 +1220,71 @@ architecture RTL of emsx_top is
     -- Port F4 device
     signal  portF4_req      : std_logic;
     signal  portF4_bit7     : std_logic;                                            -- 1=hard reset, 0=soft reset
+    signal  portF4_bit5     : std_logic;                                            -- MSXtR: set by the Z80 boot, read by the R800 at reset
+
+    -- S1990 registers (I/O $E4-$E5)
+    signal  s1990_req       : std_logic;
+    signal  s1990_sel       : std_logic_vector(  7 downto 0 );                      -- E4h: register select
+    signal  s1990_cpu       : std_logic_vector(  6 downto 5 );                      -- R#6: bit6 1=ROM 0=DRAM, bit5 1=Z80 0=R800
+    signal  s1990_dbi       : std_logic_vector(  7 downto 0 );
+    signal  s1990_r800      : std_logic;                                            -- '1' => R800 selected (MSXtR only)
+
+    -- R800: a second CPU (T80s on clk21m) on the internal bus, the T80a is the Z80
+    signal  r8_cen          : std_logic;
+    signal  r8_wait_n       : std_logic;
+    signal  r8_merq_n       : std_logic;
+    signal  r8_iorq_n       : std_logic;
+    signal  r8_rd_n         : std_logic;
+    signal  r8_wr_n         : std_logic;
+    signal  r8_m1_n         : std_logic;
+    signal  r8_rfsh_n       : std_logic;
+    signal  r8_adr          : std_logic_vector( 15 downto 0 );
+    signal  r8_dbo          : std_logic_vector(  7 downto 0 );
+    signal  r8_active       : std_logic;                                            -- the R800 is the running CPU
+    signal  r8_stall        : std_logic;                                            -- R800 ahead of a real R800
+    signal  r8_iohold       : std_logic;                                            -- R800 I/O before its real time
+    signal  r8_started      : std_logic;                                            -- the R800 runs from reset at its first selection
+    signal  r8_owner        : std_logic;                                            -- the R800 owns the bus (the Z80 has released it)
+    signal  r8_parked       : std_logic;                                            -- the R800 is stopped on the T1 of an M1
+    signal  z80_busrq_n     : std_logic;
+    signal  z80_busak_n     : std_logic;
+    signal  r8_ext          : std_logic;                                            -- R800 access to an external slot / I/O port
+    signal  r8_ext_cnt      : std_logic_vector(  2 downto 0 );
+    signal  c_merq_n        : std_logic;                                            -- CPU bus seen by the internal bus registers
+    signal  c_iorq_n        : std_logic;
+    signal  c_rd_n          : std_logic;
+    signal  c_wr_n          : std_logic;
+    signal  c_rfsh_n        : std_logic;
+    signal  c_adr           : std_logic_vector( 15 downto 0 );
+    signal  c_dat           : std_logic_vector(  7 downto 0 );
+    signal  rc_rd           : std_logic;                                            -- R800 bus cycle tracking
+    signal  rc_wr           : std_logic;
+    signal  rc_io           : std_logic;
+    signal  rc_req          : std_logic;
+    signal  rc_wram         : std_logic;
+    signal  rc_cnt          : std_logic_vector(  2 downto 0 );
+    signal  rc_done         : std_logic;
+    signal  rc_mmcbusy      : std_logic;
+    signal  rc_vdpbusy      : std_logic;
+    signal  vdp_busy        : std_logic;
+    signal  r8_xwait_d      : std_logic;                                            -- external waits delayed by one clock (dlydbi)
+    type    r8_cache_t      is array( 0 to 16383 ) of std_logic_vector( 19 downto 0 );    -- valid & tag(CpuAdr 24..14) & data
+    signal  r8_cache        : r8_cache_t;                                           -- R800 read cache of the SDRAM
+    signal  rc_q            : std_logic_vector( 19 downto 0 );
+    signal  rc_cacheable    : std_logic;
+    signal  r8_hit          : std_logic;
+    signal  r8_dbi          : std_logic_vector(  7 downto 0 );
+    signal  rc_we           : std_logic;
+    signal  rc_wa           : std_logic_vector( 13 downto 0 );
+    signal  rc_wd           : std_logic_vector( 19 downto 0 );
+    signal  rc_clr          : std_logic_vector( 13 downto 0 ) := (others => '0');
+    signal  sdr_slot_adr    : std_logic_vector( 24 downto 0 );                      -- SDRAM CPU slot tracking
+    signal  sdr_slot_ok     : std_logic := '0';
+    signal  sdr_rd_adr      : std_logic_vector( 24 downto 0 );
+    signal  sdr_rd_ok       : std_logic := '0';
+    signal  sdr_wr_adr      : std_logic_vector( 24 downto 0 );
+    signal  sdr_wr_dat      : std_logic_vector(  7 downto 0 );
+    signal  sdr_wr_ok       : std_logic := '0';
 
     -- turboR PCM device
     signal  tr_pcm_req      : std_logic;
@@ -1073,6 +1295,7 @@ architecture RTL of emsx_top is
     -- ESP signals
     signal  esp_dout_s      : std_logic_vector(  7 downto 0 ) := (others => '1');
     signal  esp_wait_s      : std_logic := '1';
+    signal  vdp_wait_n_s    : std_logic;
 --  signal  esp_tx_i        : std_logic;
 --  signal  esp_rx_o        : std_logic;
 
@@ -1112,8 +1335,9 @@ begin
     begin
         if( clk21m'event and clk21m = '1' )then
             -- OPL3 can be managed by the SCRLK key or by the CmtScro signal
+            -- ZEMMIX: on at power on (MoonSound) if the OSD option is on, SCRLK turns it off
             if( use_opl3_g )then
-                opl3_enabled <= CmtScro;
+                opl3_enabled <= opl_on_i and not CmtScro;
             else
                 opl3_enabled <= '0';
             end if;
@@ -1395,7 +1619,10 @@ begin
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
-            if( HardRst_cnt = "0010" or bios_reload_ack = '1' )then                     -- long click > 800ms
+            -- ZEMMIX: not during the ZEMMIX.ROM download (the MSX is in reset for 1-2 s then, at
+            -- power on HardRst_cnt is "0010" at once): RstSeq goes on and the SDRAM is ready for
+            -- the loader after about 24 ms, else its FIFO overflows
+            if( (HardRst_cnt = "0010" and rom_dl_i = '0') or bios_reload_ack = '1' )then   -- long click > 800ms
                 RstSeq <= "00000";                                                      -- RstSeq is required
                 ff_reload_n <= '0';                                                     -- OCM-BIOS is partial
             elsif( ff_mem_seq = "00" and FreeCounter = X"FFFF" and RstSeq /= "11111" )then
@@ -1410,7 +1637,7 @@ begin
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
-            xSltRst_n <= pSltRst_n or RstKeyLock;                                       -- hard reset /w lock
+            xSltRst_n <= pSltRst_n;                                                     -- hard reset (OSD / image mount): no port $43 reset lock (RstKeyLock is not initialized by switched_io_ports)
         end if;
     end process;
 
@@ -1420,7 +1647,7 @@ begin
         if( memclk'event and memclk = '1' )then
             if( RstSeq = "11111" )then
                 -- RstSeq has finished
-                reset <= not (iSltRst_n and swioRESET_n);                               -- global reset
+                reset <= not (iSltRst_n and swioRESET_n and comb_reset_n);              -- global reset
             else
                 -- RstSeq is in progress
                 reset <= '1';                                                           -- SDRAM integrity protection
@@ -1601,19 +1828,27 @@ begin
     pSltCs2_n   <=  pSltRd_n when( pSltAdr(15 downto 14) = "10" )else '1';
     pSltCs12_n  <=  pSltRd_n when( pSltAdr(15 downto 14) = "01" )else
                     pSltRd_n when( pSltAdr(15 downto 14) = "10" )else '1';
-    pSltM1_n    <=  CpuM1_n;
-    pSltRfsh_n  <=  CpuRfsh_n;
+    pSltM1_n    <=  r8_m1_n     when( r8_owner = '1' )else CpuM1_n;
+    pSltRfsh_n  <=  r8_rfsh_n   when( r8_owner = '1' )else CpuRfsh_n;
+
+    -- the R800 drives the slot bus while it owns it (the Z80 has released it)
+    pSltAdr     <=  r8_adr      when( r8_owner = '1' )else (others => 'Z');
+    pSltMerq_n  <=  r8_merq_n   when( r8_owner = '1' )else 'Z';
+    pSltIorq_n  <=  r8_iorq_n   when( r8_owner = '1' )else 'Z';
+    pSltRd_n    <=  r8_rd_n     when( r8_owner = '1' )else 'Z';
+    pSltWr_n    <=  r8_wr_n     when( r8_owner = '1' )else 'Z';
 
     pSltInt_n   <=  '0' when( pVdpInt_n = '0' ) or
-                            ( opl3_Int_n = '0' and opl3_enabled = '1' )else
+                            ( opl3_Int_n = '0' and opl3_enabled = '1' ) or
+                            ( v99_int_s = '0' )else
                     'Z';
 
     pSltSltsl_n <=  '1' when( Scc1Type /= "00" )else
-                    '0' when( pSltMerq_n = '0' and CpuRfsh_n = '1' and PriSltNum = "01" )else
+                    '0' when( pSltMerq_n = '0' and c_rfsh_n = '1' and PriSltNum = "01" )else
                     '1';
 
     pSltSlts2_n <=  '1' when( Slot2Mode /= "00" )else
-                    '0' when( pSltMerq_n = '0' and CpuRfsh_n = '1' and PriSltNum = "10" )else
+                    '0' when( pSltMerq_n = '0' and c_rfsh_n = '1' and PriSltNum = "10" )else
                     '1';
 
     pSltBdir_n  <=  'Z';
@@ -1626,7 +1861,8 @@ begin
                     '1' when( pSltMerq_n = '0' and PriSltNum = "10" and Slot2Mode /= "00" )else
                     '0';
 
-    pSltDat     <=  dbi when( BusDir_o = '1' )else
+    pSltDat     <=  dbi     when( BusDir_o = '1' )else
+                    r8_dbo  when( r8_owner = '1' and r8_wr_n = '0' )else
                     (others => 'Z');
 
     pSltRsv5    <=  'Z';
@@ -1682,7 +1918,7 @@ begin
                 count := count - 1;
             end if;
 
-            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' )then
+            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' or v99_wait_n = '0' )then
                 wait_n_s <= '0';
             elsif( count /= "0000" )then
                 wait_n_s <= '0';
@@ -1729,13 +1965,13 @@ begin
         elsif( clk21m'event and clk21m = '1' )then
 
             -- MSX slot signals
-            iSltRfsh_n      <= pSltRfsh_n;
-            iSltMerq_n      <= pSltMerq_n;
-            iSltIorq_n      <= pSltIorq_n;
-            xSltRd_n        <= pSltRd_n;
-            xSltWr_n        <= pSltWr_n;
-            iSltAdr         <= pSltAdr;
-            iSltDat         <= pSltDat;
+            iSltRfsh_n      <= c_rfsh_n;
+            iSltMerq_n      <= c_merq_n;
+            iSltIorq_n      <= c_iorq_n;
+            xSltRd_n        <= c_rd_n;
+            xSltWr_n        <= c_wr_n;
+            iSltAdr         <= c_adr;
+            iSltDat         <= c_dat;
 
             if( iSltMerq_n  = '1' and iSltIorq_n = '1' )then
                 iack <= '0';
@@ -1750,7 +1986,7 @@ begin
                 dlydbi <= RomDbi;
             elsif( mem = '1' and iSltErm = '1' and MmcEna = '1' )then                                       -- MegaSD
                 dlydbi <= MmcDbi;
-            elsif( mem = '0' and adr(  7 downto 2 ) = "100110" )then                                        -- VDP (V9938/V9958)
+            elsif( mem = '0' and adr(  7 downto 3 ) = "10011" )then                                         -- VDP (V9968: 98-9Fh)
                 dlydbi <= VdpDbi;
             elsif( mem = '0' and adr(  7 downto 2 ) = "101000" )then                                        -- PSG (AY-3-8910)
                 dlydbi <= PsgDbi;
@@ -1770,21 +2006,29 @@ begin
                 dlydbi <= RtcDbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "1110011" )then                                       -- System timer (S1990)
                 dlydbi <= systim_dbi;
+            elsif( mem = '0' and adr(  7 downto 1 ) = "1110010" and portF4_mode = '1' )then                 -- S1990 registers
+                dlydbi <= s1990_dbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "1010010" )then                                       -- turboR PCM device
                 dlydbi <= tr_pcm_dbi;
+            elsif( mem = '0' and adr(  7 downto 1 ) = "0111111" and opl3_enabled = '1' and use_opl4_g )then  -- OPL4 wave ports 7E-7Fh
+                dlydbi <= opl4_do;
+            elsif( mem = '0' and adr(  7 downto 4 ) = "0110" and use_v9990_g )then                          -- V9990 ports 60-6Fh
+                dlydbi <= v99_dbi_s;
             elsif( mem = '0' and adr(  7 downto 4 ) = "0100" and io40_n /= "11111111" )then                 -- Switched I/O ports
                 dlydbi <= swio_dbi;
             elsif( mem = '0' and adr(  7 downto 0 ) = "10100111" and portF4_mode = '1' )then                -- Pause R800 (read only)
                 dlydbi <= (others => '0');
-            elsif( mem = '0' and adr(  7 downto 0 ) = "11110010" and use_wifi_g )then                       -- Port F2 (ESP8266 BIOS)
+            elsif( mem = '0' and adr(  7 downto 0 ) = "11110010" and portF2_ena = '1' and use_wifi_g )then                       -- Port F2 (ESP8266 BIOS)
                 dlydbi <= portF2;
             elsif( mem = '0' and adr(  7 downto 0 ) = "11110100" and portF4_mode = '1' )then                -- Port F4 normal (Z80 mode)
-                dlydbi <= portF4_bit7 & "0000000";
+                dlydbi <= portF4_bit7 & '0' & portF4_bit5 & "00000";
             elsif( mem = '0' and adr(  7 downto 0 ) = "11110100" )then                                      -- Port F4 inverted
                 dlydbi <= portF4_bit7 & "1111111";
             elsif( mem = '0' and adr(  7 downto 1 ) = "0000011" and use_wifi_g )then                        -- ESP ports 06-07h
                 dlydbi <= esp_dout_s;
-            elsif( mem = '0' and adr(  7 downto 3 ) = "11000" and opl3_enabled = '1' )then                  -- OPL3 ports C0-C3h / C4-C7h
+            elsif( mem = '0' and adr(  7 downto 2 ) = "110001" and adr(0) = '0' and opl3_enabled = '1' and use_opl4_g )then  -- C4h / C6h status: OPL3 + {LD, BUSY} of the OPL4
+                dlydbi <= opl3_dout_s or ("000000" & opl4_status);
+            elsif( mem = '0' and adr(  7 downto 2 ) = "110001" and opl3_enabled = '1' )then                 -- OPL3 / MoonSound FM ports C4-C7h
                 dlydbi <= opl3_dout_s;
 --          elsif( mem = '0' and adr(  7 downto 1 ) = "0111110" and opl3_enabled = '1' )then                -- OPLL ports 7C-7Dh via OPL3
 --              dlydbi <= opl3_dout_s;
@@ -1846,7 +2090,7 @@ begin
             end if;
 
             if( req = '0' )then
-                wrt <= not pSltWr_n;                                    -- 1=write, 0=read
+                wrt <= not c_wr_n;                                      -- 1=write, 0=read
             end if;
 
         end if;
@@ -1854,7 +2098,9 @@ begin
     end process;
 
     -- access request, CPU > Components
-    req     <=  '1'         when( ((iSltMerq_n = '0') or (iSltIorq_n = '0')) and
+    req     <=  '0'         when( rc_mmcbusy = '1' or rc_vdpbusy = '1' )else   -- R800: device busy, hold the request
+                '0'         when( r8_iohold = '1' and rc_req = '0' )else       -- R800: I/O at the real R800 time
+                '1'         when( ((iSltMerq_n = '0') or (iSltIorq_n = '0')) and
                                   ((xSltRd_n = '0') or (xSltWr_n = '0')) and iack = '0' )else '0';
 
     mem     <=  iSltIorq_n;                                             -- 1=memory area, 0=I/O area
@@ -1872,6 +2118,242 @@ begin
                 Scc2Dbi     when( jSltScc2 = '1' )else
                 RamDbi      when( jSltMem  = '1' )else
                 dlydbi;
+
+    ----------------------------------------------------------------
+    -- R800 (MSXtR): a second CPU, like the real machine
+    ----------------------------------------------------------------
+    -- The T80a (U01) stays the Z80 with the OCM derived clock. The R800
+    -- is a T80s on clk21m (21.48MHz) with the R800 extensions. The S1990
+    -- R#6 selects the running CPU, the other one is stopped with its state
+    -- and the bus (internal and cartridge slots) belongs to the running one:
+    --  * Z80  : BUSRQ, it ends its bus cycle and releases the bus (the real
+    --           Z80 stops inside the CHGCPU OTIR and sends its 2nd byte
+    --           when resumed)
+    --  * R800 : clock enable off on the T1 of its next M1, so that no
+    --           bus cycle is left half done, then the Z80 gets the bus back
+    -- The R800 drives the cartridge slot bus while it owns it, an access
+    -- to an external slot or I/O port lasts like a Z80 one.
+    -- The R800 starts from reset at its first selection (the BIOS uses
+    -- the F4 bit 5 to tell it apart and parks it inside CHGCPU).
+    -- An R800 access waits until it is really completed: the SDRAM CPU
+    -- slot has read/written this very address, or the request of this
+    -- bus cycle has been acked (+3 clocks for registered device data).
+    ----------------------------------------------------------------
+    U01_R8 : entity work.T80s
+        generic map(
+            Mode        => 0,
+            T2Write     => 1,
+            IOWait      => 1,
+            MulDlyB     => 34,                  -- MULUB = 14 R800 cycles at 21.48MHz
+            MulDlyW     => 107                  -- MULUW = 36 R800 cycles at 21.48MHz
+        )
+        port map(
+            RESET_n     => (not reset),
+            R800_mode   => '1',
+            CLK         => clk21m,
+            CEN         => r8_cen,
+            WAIT_n      => r8_wait_n,
+            INT_n       => pSltInt_n,
+            NMI_n       => '1',
+            BUSRQ_n     => '1',
+            M1_n        => r8_m1_n,
+            MREQ_n      => r8_merq_n,
+            IORQ_n      => r8_iorq_n,
+            RD_n        => r8_rd_n,
+            WR_n        => r8_wr_n,
+            RFSH_n      => r8_rfsh_n,
+            HALT_n      => open,
+            BUSAK_n     => open,
+            A           => r8_adr,
+            DI          => r8_dbi,
+            DO          => r8_dbo
+        );
+
+    -- R800 read cache: 16K byte lines, direct mapped on the physical address (CpuAdr),
+    -- write through. Every CPU write to the SDRAM updates it (Z80 too), it is cleared
+    -- during reset (RstSeq clears SDRAM areas). A hit has no wait state: the address
+    -- is registered at the start of T2, the entry is read at the clk21m falling edge
+    -- and the data is taken at the end of T2 (half a clk21m cycle, constrained).
+    rc_cacheable <= mem and jSltMem and (not jSltScc1) and (not jSltScc2);
+
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '0' )then
+            rc_q <= r8_cache( conv_integer(CpuAdr(13 downto 0)) );
+        end if;
+    end process;
+
+    r8_hit  <=  '1' when( r8_owner = '1' and rc_rd = '1' and rc_cacheable = '1' and
+                          rc_q(19) = '1' and rc_q(18 downto 8) = CpuAdr(24 downto 14) )else '0';
+    r8_dbi  <=  rc_q(7 downto 0)    when( r8_hit = '1' )else
+                pSltDat             when( r8_ext = '1' and r8_rd_n = '0' )else             -- from a cartridge
+                dbi;
+
+    rc_we   <=  '1' when( reset = '1' or w_wrt_req = '1' )else
+                '1' when( r8_owner = '1' and rc_rd = '1' and rc_cacheable = '1' and r8_hit = '0' and rc_done = '1' )else
+                '0';
+    rc_wa   <=  rc_clr                  when( reset = '1' )else
+                CpuAdr(13 downto 0);
+    rc_wd   <=  (others => '0')                         when( reset = '1' )else
+                '1' & CpuAdr(24 downto 14) & dbo        when( w_wrt_req = '1' )else
+                '1' & CpuAdr(24 downto 14) & RamDbi;
+
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            if( rc_we = '1' )then
+                r8_cache( conv_integer(rc_wa) ) <= rc_wd;
+            end if;
+            if( reset = '1' )then
+                rc_clr <= rc_clr + 1;
+            end if;
+        end if;
+    end process;
+
+    -- R800 speed: hold the T80s when it is faster than a real R800 (see r800_timing.vhd)
+    -- R800 speed: hold the T80s when it is faster than a real R800 (see r800_timing.vhd)
+    r8_active <= r8_owner;
+
+    U01_R8T : entity work.r800_timing
+        port map(
+            clk21m      => clk21m,
+            reset       => reset,
+            active      => r8_active,
+            m1_n        => r8_m1_n,
+            merq_n      => r8_merq_n,
+            iorq_n      => r8_iorq_n,
+            rd_n        => r8_rd_n,
+            wr_n        => r8_wr_n,
+            rfsh_n      => r8_rfsh_n,
+            wait_n      => r8_wait_n,
+            adr         => r8_adr,
+            di          => r8_dbi,
+            ppi_a       => PpiPortA,
+            exp0        => ExpSlot0,
+            exp3        => ExpSlot3,
+            dram_mode   => not s1990_cpu(6),
+            stall       => r8_stall,
+            io_hold     => r8_iohold
+        );
+
+    r8_cen  <=  '0' when( r8_owner = '0' or r8_stall = '1' )else
+                '0' when( s1990_r800 = '0' and r8_m1_n = '0' and r8_merq_n = '1' )else
+                '1';
+
+    r8_parked   <= '1' when( r8_started = '0' or (r8_m1_n = '0' and r8_merq_n = '1' and r8_iorq_n = '1') )else '0';
+    z80_busrq_n <= '0' when( s1990_r800 = '1' or r8_owner = '1' )else '1';
+
+    -- bus owner: the R800 once the Z80 has released the bus, the Z80 again once the R800 is stopped
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            r8_owner    <= '0';
+            r8_started  <= '0';
+        elsif( clk21m'event and clk21m = '1' )then
+            if( r8_owner = '0' )then
+                if( s1990_r800 = '1' and z80_busak_n = '0' )then
+                    r8_owner   <= '1';
+                    r8_started <= '1';
+                end if;
+            elsif( s1990_r800 = '0' and r8_parked = '1' )then
+                r8_owner <= '0';
+            end if;
+        end if;
+    end process;
+
+    -- CPU bus seen by the internal bus registers (idle while the bus changes hands)
+    c_merq_n <= r8_merq_n when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltMerq_n;
+    c_iorq_n <= r8_iorq_n when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltIorq_n;
+    c_rd_n   <= r8_rd_n   when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltRd_n;
+    c_wr_n   <= r8_wr_n   when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else pSltWr_n;
+    c_rfsh_n <= r8_rfsh_n when( r8_owner = '1' )else '1' when( z80_busak_n = '0' )else CpuRfsh_n;
+    c_adr    <= r8_adr    when( r8_owner = '1' )else pSltAdr;
+    c_dat    <= r8_dbo    when( r8_owner = '1' )else pSltDat;
+
+    -- R800 bus cycle tracking
+    rc_rd   <=  '1' when( r8_merq_n = '0' and r8_rd_n = '0' )else '0';
+    rc_wr   <=  '1' when( r8_merq_n = '0' and r8_wr_n = '0' )else '0';
+    rc_io   <=  '1' when( r8_iorq_n = '0' and (r8_rd_n = '0' or r8_wr_n = '0') )else '0';
+
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            rc_req  <= '0';
+            rc_wram <= '0';
+            rc_cnt  <= (others => '0');
+        elsif( clk21m'event and clk21m = '1' )then
+            if( r8_owner = '0' or (rc_rd = '0' and rc_wr = '0' and rc_io = '0') )then
+                rc_req  <= '0';
+                rc_wram <= '0';
+                rc_cnt  <= (others => '0');
+            else
+                if( req = '1' )then
+                    rc_req <= '1';
+                end if;
+                if( w_wrt_req = '1' )then
+                    rc_wram <= '1';
+                end if;
+                if( rc_req = '1' and rc_cnt /= "111" )then
+                    rc_cnt <= rc_cnt + 1;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    rc_done <=  '0' when( rc_req = '0' or iack = '0' )else
+                '0' when( rc_rd = '1' and mem = '1' and jSltMem = '1' and jSltScc1 = '0' and jSltScc2 = '0' and
+                          not (sdr_rd_ok = '1' and sdr_rd_adr = CpuAdr) )else
+                '0' when( rc_wram = '1' and not (sdr_wr_ok = '1' and sdr_wr_adr = CpuAdr and sdr_wr_dat = dbo) )else
+                '0' when( (rc_io = '1' or (rc_rd = '1' and (jSltMem = '0' or jSltScc1 = '1' or jSltScc2 = '1'))) and rc_cnt < "011" )else
+                '0' when( rc_io = '1' and opl4_wait_n = '0' )else                     -- OPL4: IN 7Fh until its data is there
+                '0' when( rc_io = '1' and v99_wait_n = '0' )else                      -- V9990: until it has taken / given the byte
+                '1';
+
+    -- a device that ends its wait on edge W gives its data in dlydbi on edge W+1: the R800
+    -- samples on the first edge with WAIT high, so the external waits last one clock more
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            r8_xwait_d <= '1';
+        elsif( clk21m'event and clk21m = '1' )then
+            r8_xwait_d <= pSltWait_n and esp_wait_s and vdp_wait_n_s and opl4_wait_n and v99_wait_n;
+        end if;
+    end process;
+
+    r8_wait_n <= '1' when( r8_owner = '0' )else                                           -- stopped anyway
+                 '1' when( r8_hit = '1' )else                                             -- cache hit: no wait state
+                 '0' when( (rc_rd = '1' or rc_wr = '1' or rc_io = '1') and rc_done = '0' )else
+                 '0' when( r8_ext = '1' and r8_ext_cnt /= "111" )else                     -- external: as long as a Z80 access
+                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' or v99_wait_n = '0' or r8_xwait_d = '0' )else
+                 '1';
+
+    -- R800 access to the cartridge slots (no internal device answers): the strobes last
+    -- about 8 clk21m (370ns), like a Z80 access, for the cartridges
+    r8_ext  <=  '0' when( r8_owner = '0' or (rc_rd = '0' and rc_wr = '0' and rc_io = '0') )else
+                '1' when( mem = '1' and PriSltNum = "01" and Scc1Type = "00" )else
+                '1' when( mem = '1' and PriSltNum = "10" and Slot2Mode = "00" )else
+                '1' when( mem = '0' and BusDir = '0' )else
+                '0';
+
+    process( reset, clk21m )
+    begin
+        if( reset = '1' )then
+            r8_ext_cnt <= (others => '0');
+        elsif( clk21m'event and clk21m = '1' )then
+            if( r8_ext = '0' )then
+                r8_ext_cnt <= (others => '0');
+            elsif( r8_ext_cnt /= "111" )then
+                r8_ext_cnt <= r8_ext_cnt + 1;
+            end if;
+        end if;
+    end process;
+
+    -- the MegaSD data port (4000-57FFh) and the V9968 ignore/overwrite an access that comes
+    -- while the previous one is running, the R800 is fast enough for that: hold the request.
+    -- Only before it is issued: the access itself makes the device busy, and the MegaSD gets
+    -- its ack from the SDRAM slot (RamAck), so dropping req then would restart it forever.
+    rc_mmcbusy <= r8_owner and (not rc_req) and mem and iSltErm and MmcEna and MmcAct when( adr(15 downto 13) = "010" and adr(12 downto 11) /= "11" )else '0';
+    rc_vdpbusy <= r8_owner and (not rc_req) and (not mem) and vdp_busy when( adr(7 downto 3) = "10011" )else '0';
 
     ----------------------------------------------------------------
     -- Port F2 (ESP8266 BIOS)
@@ -1898,12 +2380,54 @@ begin
     begin
         if( reset = '1' )then
             portF4_bit7 <= not LastRst_sta;
+            portF4_bit5 <= '0';
         elsif( clk21m'event and clk21m = '1' )then
             if( portF4_req = '1' and wrt = '1' )then
                 portF4_bit7 <= dbo(7);
+                portF4_bit5 <= dbo(5) and portF4_mode;
             end if;
         end if;
     end process;
+
+    ----------------------------------------------------------------
+    -- S1990 registers (MSXtR only)
+    ----------------------------------------------------------------
+    -- E4h : register select (read back as written)
+    -- E5h : register data
+    --       R#5  = firmware switch (bit6, always off)
+    --       R#6  = CPU mode, bit6 1=ROM 0=DRAM, bit5 1=Z80 0=R800
+    --       R#13 = 03h, R#14 = 2Fh, R#15 = 8Bh, others = FFh
+    -- the R800 is emulated by the T80 at 10.74MHz with MULU opcodes,
+    -- the DRAM mode is only stored, the BIOS is always read from ROM
+    --
+    -- two CPUs like the real machine: the S1990 R#6 selects the running one,
+    -- the other is frozen with its state (see the R800 section)
+    ----------------------------------------------------------------
+    process( clk21m, reset )
+    begin
+        if( reset = '1' )then
+            s1990_sel <= (others => '0');
+            s1990_cpu <= "11";                                                          -- Z80, ROM mode
+        elsif( clk21m'event and clk21m = '1' )then
+            if( s1990_req = '1' and wrt = '1' )then
+                if( adr(0) = '0' )then
+                    s1990_sel <= dbo;
+                elsif( s1990_sel = X"06" )then
+                    s1990_cpu <= dbo(6 downto 5);
+                end if;
+            end if;
+        end if;
+    end process;
+
+    s1990_dbi   <=  s1990_sel                       when( adr(0) = '0' )else
+                    "00000000"                      when( s1990_sel = X"05" )else
+                    "0" & s1990_cpu & "00000"       when( s1990_sel = X"06" )else
+                    X"03"                           when( s1990_sel = X"0D" )else
+                    X"2F"                           when( s1990_sel = X"0E" )else
+                    X"8B"                           when( s1990_sel = X"0F" )else
+                    X"FF";
+
+    s1990_r800  <=  portF4_mode and not s1990_cpu(5);
 
     ----------------------------------------------------------------
     -- PPI(8255) / primary-slot, keyboard, 1bit sound port
@@ -2084,7 +2608,7 @@ begin
     RamReq  <=  Scc1Ram or Scc2Ram or ErmRam or MapRam or RomReq or KanRom;
 
     -- access request to component
-    VdpReq      <=  req when( mem = '0' and adr(7 downto 2) = "100110"                                                  )else '0';  -- I/O:98-9Bh / VDP (V9938/V9958)
+    VdpReq      <=  req when( mem = '0' and adr(7 downto 3) = "10011"                                                   )else '0';  -- I/O:98-9Fh / VDP (V9968)
     PsgReq      <=  req when( mem = '0' and adr(7 downto 2) = "101000"                                                  )else '0';  -- I/O:A0-A3h / PSG (AY-3-8910)
     Psg2Req     <=  req when( mem = '0' and adr(7 downto 2) = "000100" and iPsg2_ena = '1' and use_dualpsg_g            )else '0';  -- I/O:10-13h / PSG2 (AY-3-8910)
     PpiReq      <=  req when( mem = '0' and adr(7 downto 2) = "101010"                                                  )else '0';  -- I/O:A8-ABh / PPI (8255)
@@ -2097,13 +2621,14 @@ begin
     Scc2Req     <=  req when( iSltScc2 = '1'                                                                            )else '0';  -- MEM:       / ESE-SCC2
     ErmReq      <=  req when( iSltErm  = '1'                                                                            )else '0';  -- MEM:       / ESE-RAM, MegaSD
     RtcReq      <=  req when( mem = '0' and adr(7 downto 1) = "1011010"                                                 )else '0';  -- I/O:B4-B5h / RTC (RP-5C01)
+    s1990_req   <=  req when( mem = '0' and adr(7 downto 1) = "1110010" and portF4_mode = '1'                          )else '0';  -- I/O:E4-E5h / S1990 registers
     systim_req  <=  req when( mem = '0' and adr(7 downto 1) = "1110011"                                                 )else '0';  -- I/O:E6-E7h / System timer (S1990)
     swio_req    <=  req when( mem = '0' and adr(7 downto 4) = "0100"                                                    )else '0';  -- I/O:40-4Fh / Switched I/O ports
-    portF2_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110010" and use_wifi_g                                 )else '0';  -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
+    portF2_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                             )else '0';  -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
     portF4_req  <=  req when( mem = '0' and adr(7 downto 0) = "11110100"                                                )else '0';  -- I/O:F4h    / Port F4 device
     tr_pcm_req  <=  req when( mem = '0' and adr(7 downto 1) = "1010010"                                                 )else '0';  -- I/O:A4-A5h / turboR PCM device
 
-    BusDir  <=  '1' when( pSltAdr(7 downto 2) = "100110"                                        )else   -- I/O:98-9Bh / VDP (V9938/V9958)
+    BusDir  <=  '1' when( pSltAdr(7 downto 3) = "10011"                                         )else   -- I/O:98-9Fh / VDP (V9968)
                 '1' when( pSltAdr(7 downto 2) = "101000"                                        )else   -- I/O:A0-A3h / PSG (AY-3-8910)
                 '1' when( pSltAdr(7 downto 2) = "000100" and iPsg2_ena = '1' and use_dualpsg_g  )else   -- I/O:10-13h / PSG2 (AY-3-8910)
                 '1' when( pSltAdr(7 downto 2) = "101010"                                        )else   -- I/O:A8-ABh / PPI (8255)
@@ -2111,14 +2636,17 @@ begin
                 '1' when( pSltAdr(7 downto 1) = "1101100"                                       )else   -- I/O:D8-D9h / Kanji-data (JIS1 only)
                 '1' when( pSltAdr(7 downto 2) = "111111"                                        )else   -- I/O:FC-FFh / Memory-mapper
                 '1' when( pSltAdr(7 downto 1) = "1011010"                                       )else   -- I/O:B4-B5h / RTC (RP-5C01)
+                '1' when( pSltAdr(7 downto 1) = "1110010" and portF4_mode = '1'                 )else   -- I/O:E4-E5h / S1990 registers
                 '1' when( pSltAdr(7 downto 1) = "1110011"                                       )else   -- I/O:E6-E7h / System timer (S1990)
                 '1' when( pSltAdr(7 downto 4) = "0100" and io40_n /= "11111111"                 )else   -- I/O:40-4Fh / Switched I/O ports
                 '1' when( pSltAdr(7 downto 0) = "10100111" and portF4_mode = '1'                )else   -- I/O:A7h    / Pause R800 (read only)
-                '1' when( pSltAdr(7 downto 0) = "11110010" and use_wifi_g                       )else   -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
+                '1' when( pSltAdr(7 downto 0) = "11110010" and portF2_ena = '1' and use_wifi_g                   )else   -- I/O:F2h    / Port F2 device (ESP8266 BIOS)
                 '1' when( pSltAdr(7 downto 0) = "11110100"                                      )else   -- I/O:F4h    / Port F4 device
                 '1' when( pSltAdr(7 downto 1) = "1010010"                                       )else   -- I/O:A4-A5h / turboR PCM device
+                '1' when( pSltAdr(7 downto 1) = "0111111" and opl3_enabled = '1' and use_opl4_g    )else   -- I/O:7E-7Fh / OPL4 wave
+                '1' when( pSltAdr(7 downto 4) = "0110" and use_v9990_g                          )else   -- I/O:60-6Fh / V9990
                 '1' when( pSltAdr(7 downto 1) = "0000011" and use_wifi_g                        )else   -- I/O:06-07h / ESP
-                '1' when( pSltAdr(7 downto 3) = "11000" and opl3_enabled = '1'                  )else   -- I/O:C0-C7h / OPL3
+                '1' when( pSltAdr(7 downto 2) = "110001" and opl3_enabled = '1'                 )else   -- I/O:C4-C7h / OPL3 (MoonSound FM)
 --              '1' when( pSltAdr(7 downto 1) = "0111110" and opl3_enabled = '1'                )else   -- I/O:7C-7Dh / OPLL via OPL3
                 '1' when( pSltAdr(7 downto 0) = "11101001" and use_midi_g                       )else   -- I/O:E9h    / MIDI
                 '0';
@@ -2132,7 +2660,10 @@ begin
     process( clk21m )
     begin
         if( clk21m'event and clk21m = '1' )then
-            case DisplayMode is
+            -- F18A: the VDP always outputs 15kHz with separate H / V syncs
+            -- and the mist_video scandoubler makes 31kHz, so always take
+            -- the VGA branch (RGB, HS, VS) whatever DisplayMode is.
+            case std_logic_vector'("10") is
             when "00" =>                                            -- TV 15kHz
                 pDac_VR     <= videoC;                              -- Chrominance of S-Video Out
                 pDac_VG     <= videoY;                              -- Luminance of S-Video Out
@@ -2289,6 +2820,17 @@ begin
                             "01"     & KanAdr(17 downto  0)                 when( rom_kanj = '1' )else                          -- [ D ]040000-07FFFF ( 256 kB) Kanji-data (JIS1+JIS2)
                             (others => '0');
 
+    -- CpuAdr registered in memclk for the SDRAM side (ZEMMIX-dl0): the slot decoding
+    -- (iSltAdr, PpiPortA, ExpSlot3 -> iSlt* -> CpuAdr) was the critical memclk path into
+    -- SdrAdr / SdrUdq. The cpu sees its address one memclk (11.6 ns) later, and every
+    -- SDRAM process uses this copy, so the R800 slot tracking stays consistent.
+    process( memclk )
+    begin
+        if( memclk'event and memclk = '1' )then
+            CpuAdr_r <= CpuAdr;
+        end if;
+    end process;
+
     ----------------------------------------------------------------
     -- SDRAM access
     ----------------------------------------------------------------
@@ -2324,6 +2866,8 @@ begin
                     SdrSta <= "0" & RstSeq(1 downto 0);
                 elsif( RstSeq(4 downto 3) /= "11" )then
                     SdrSta <= "101";                                                -- Write (Initialize memory content)
+                elsif( sdr_hold = '1' and wave_pend = '0' )then
+                    SdrSta <= "010";                                                -- MSX reset (VDP stopped): refresh, the slot is the OPL4's if it needs it
                 elsif( iSltRfsh_n = '0' and VideoDLClk = '1' )then
                     SdrSta <= "010";                                                -- refresh
                 else
@@ -2332,10 +2876,77 @@ begin
                 end if;
             elsif( ff_sdr_seq = "001" and SdrSta(2) = '1' and RstSeq(4 downto 3) = "11" )then
                 SdrSta(1) <= VideoDLClk;                                            -- 0:cpu, 1:vdp
-                if( VideoDLClk = '0' )then
+                if( VideoDLClk = '0' and wave_slot = '1' )then
+                    SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a free cpu slot)
+                elsif( VideoDLClk = '0' )then
                     SdrSta(0) <= w_wrt_req;         -- for cpu
                 else
                     SdrSta(0) <= not WeVdp_n;       -- for vdp
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- OPL4 wave memory (ZEMMIX-0au.4): 4 MB at the top of the 32 MB SDRAM (CpuAdr
+    -- 1C00000-1FFFFFF, not used by the memory map), served in the cpu slots the cpu
+    -- does not need. The Z80 does not wait for the SDRAM (it takes RamDbi at a fixed
+    -- time), so a slot is taken only when there is no SDRAM request (RamReq = 0; req
+    -- drops after the first RamAck, so an access uses one or two slots): the worst
+    -- delay of a cpu access grows by about 2 memclk (decided at "111", not "001").
+    -- The R800 waits for its own slot (rc_done, sdr_rd_ok / sdr_wr_ok), so under the
+    -- R800 a request waiting for 3 cpu slots takes the next one anyway (not on the
+    -- MegaSD, which acks on the SDRAM slot).
+    -- A wave slot does not touch RamDbi nor the R800 slot tracking, and RamAck waits
+    -- for a real cpu slot (iack drops req: a cpu write acked in a wave slot is lost).
+    wave_pend <= wave_req_t xor wave_done_t;
+    sdr_hold  <= reset or rom_dl_i;
+    -- during RstSeq (after the mode set) every slot writes the same few addresses again
+    -- and again: the ZEMMIX.ROM loader can take any of them for its writes
+    wave_go   <= wave_slot when( VideoDLClk = '0' or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
+    wave_sdr_adr <= "111" & wave_adr;
+
+    wave_ext_req_t <= wave_req_t;
+    wave_ext_we    <= wave_we;
+    wave_ext_adr   <= wave_adr;
+    wave_ext_wdat  <= wave_wdat;
+
+    process( memclk )
+    begin
+        if( memclk'event and memclk = '1' )then
+            if( opl4_wave_ext_g )then
+                -- wave memory outside (2nd SDRAM): no slot of this SDRAM is taken
+                wave_slot   <= '0';
+                wave_done_t <= wave_ext_done_t;                             -- with its data, in the same memclk
+                wave_rdat   <= wave_ext_rdat;
+            elsif( ff_sdr_seq = "111" )then
+                -- V9968 dot states (DH/DL): 01, 10, 00, 11. A slot starts when DH rises: with
+                -- DL = 0 it is the cpu slot, with DL = 1 the vdp slot. At "111" the previous dot
+                -- state is still there, DL = 1 before a cpu slot (as the refresh above)
+                if( wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '1' and iSltRfsh_n = '1' and
+                    ( RamReq = '0' or
+                      (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
+                    wave_slot <= '1';
+                elsif( wave_pend = '1' and wave_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
+                    wave_slot <= '1';                                       -- ZEMMIX.ROM load during RstSeq
+                elsif( wave_pend = '1' and sdr_hold = '1' and RstSeq(4 downto 3) = "11" )then
+                    wave_slot <= '1';                                       -- MSX reset: the firmware sends ZEMMIX.ROM with the MSX in reset
+                else
+                    wave_slot <= '0';
+                end if;
+            end if;
+            if( not opl4_wave_ext_g and ff_sdr_seq = "101" )then
+                if( wave_slot = '1' and SdrSta(2 downto 1) = "10" )then
+                    -- the access is done when its data is on the bus (read) or written,
+                    -- only in a real cpu slot (else it is tried again)
+                    if( wave_we = '0' )then
+                        wave_rdat <= pMemDat;
+                    end if;
+                    wave_done_t <= wave_req_t;
+                    wave_wait   <= "00";
+                elsif( wave_pend = '0' )then
+                    wave_wait   <= "00";
+                elsif( SdrSta(2 downto 1) = "10" and wave_wait /= "11" )then
+                    wave_wait   <= wave_wait + 1;                           -- one more cpu slot waited
                 end if;
             end if;
         end if;
@@ -2382,18 +2993,29 @@ begin
                 when "000" =>
                     SdrUdq <= '1';
                     SdrLdq <= '1';
+                when "001" =>
+                    -- byte of a cpu / wave write, taken one memclk before "010": CpuAdr(0)
+                    -- comes from iSltAdr (clk21m) through the slot decoding, a long path
+                    if( wave_slot = '1' )then
+                        sdr_wr_a0 <= wave_adr(0);
+                    else
+                        sdr_wr_a0 <= CpuAdr_r(0);
+                    end if;
                 when "010" =>
                     if( SdrSta(2) = '1' )then
                         if( SdrSta(0) = '0' )then
                             SdrUdq <= '0';
                             SdrLdq <= '0';
                         else
-                            if( RstSeq(4 downto 3) /= "11" )then
+                            if( wave_go = '1' )then
+                                SdrUdq <= not sdr_wr_a0;                -- OPL4 wave write (also during RstSeq)
+                                SdrLdq <= sdr_wr_a0;
+                            elsif( RstSeq(4 downto 3) /= "11" )then
                                 SdrUdq <= '0';
                                 SdrLdq <= '0';
                             elsif( VideoDLClk = '0' )then
-                                SdrUdq <= not CpuAdr(0);
-                                SdrLdq <= CpuAdr(0);
+                                SdrUdq <= not sdr_wr_a0;                -- cpu write
+                                SdrLdq <= sdr_wr_a0;
                             else
                                 SdrUdq <= not VdpAdr(16);
                                 SdrLdq <= VdpAdr(16);
@@ -2429,12 +3051,15 @@ begin
                         SdrAdr <= "00" & "010" & "0" & "010" & "0" & "000";
                         SdrBa  <= "00";                                             -- bank A
                     else                                                            -- set [row address]
-                        if( RstSeq(4 downto 2) = "011" and warmRESET /= '1' )then
+                        if( wave_go = '1' )then
+                            SdrAdr <= wave_sdr_adr(24 downto 23) & wave_sdr_adr(11 downto 1);   -- OPL4 wave memory
+                            SdrBa  <= wave_sdr_adr(22 downto 21);
+                        elsif( RstSeq(4 downto 2) = "011" and warmRESET /= '1' )then
                             SdrAdr <= (others => '0');                              -- clear "AB" mark (ESE-SCC2 >> ESE-SCC1 >> ESE-RAM)
                             SdrBa  <= "1" & RstSeq(1);                              -- bank C+D
                         elsif( VideoDLClk = '0' )then
-                            SdrAdr <= CpuAdr(24 downto 23) & CpuAdr(11 downto 1);   -- cpu read/write
-                            SdrBa  <= CpuAdr(22 downto 21);                         -- bank A+B+C+D
+                            SdrAdr <= CpuAdr_r(24 downto 23) & CpuAdr_r(11 downto 1);   -- cpu read/write
+                            SdrBa  <= CpuAdr_r(22 downto 21);                         -- bank A+B+C+D
                         else
                             SdrAdr <= "00" & VdpAdr(10 downto 0);                   -- vdp read/write
                             SdrBa  <= "11";                                         -- bank D
@@ -2444,15 +3069,18 @@ begin
                     SdrAdr(10 downto 9) <= "10";                                                            -- A10=1 => enable auto precharge
                     -- when A10=1, SdrBa is ignored and all banks are selected
                     -- be careful not to assign SdrBa during auto precharge, otherwise it will cause instability
-                    if( RstSeq(4 downto 1) = "0110" and warmRESET /= '1' )then
-                        SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
+                    if( wave_go = '1' )then
+                        SdrAdr(12 downto 11) <= wave_sdr_adr(24 downto 23);
+                        SdrAdr(8 downto 0) <= wave_sdr_adr(20 downto 12);                                   -- OPL4 wave memory
+                    elsif( RstSeq(4 downto 1) = "0110" and warmRESET /= '1' )then
+                        SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
                         SdrAdr(8 downto 0) <= RstSeq(0) & "00000000";                                       -- clear ESE-SCC2 >> ESE-SCC1
                     elsif( RstSeq(4 downto 1) = "0111" and warmRESET /= '1' )then
-                        SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
+                        SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
                         SdrAdr(8 downto 0) <= (others => '0');                                              -- clear ESE-RAM
                     elsif( VideoDLClk = '0' )then
-                        SdrAdr(12 downto 11) <= CpuAdr(24 downto 23);
-                        SdrAdr(8 downto 0) <= CpuAdr(20 downto 12);                                         -- cpu read/write
+                        SdrAdr(12 downto 11) <= CpuAdr_r(24 downto 23);
+                        SdrAdr(8 downto 0) <= CpuAdr_r(20 downto 12);                                         -- cpu read/write
                     elsif( VdpAdr(15) = '0' )then
                         SdrAdr(12 downto 11) <= "00";
                         SdrAdr(8 downto 0) <= "1" & vram_page(3 downto 0) & VdpAdr(14 downto 11);           -- vdp read/write (even)
@@ -2496,7 +3124,9 @@ begin
                     if( SdrSta(0) = '0' )then
                         SdrDat <= (others => 'Z');
                     else
-                        if( RstSeq(4 downto 3) /= "11" )then
+                        if( wave_go = '1' )then
+                            SdrDat <= wave_wdat & wave_wdat;    -- OPL4 wave memory write (also during RstSeq)
+                        elsif( RstSeq(4 downto 3) /= "11" )then
                             SdrDat <= (others => '0');
                         elsif( VideoDLClk = '0' )then
                             SdrDat <= dbo & dbo;                -- "101"(cpu write)
@@ -2511,13 +3141,49 @@ begin
         end if;
     end process;
 
+    -- CPU slot completion tracking (R800): row address at "000", column at "010",
+    -- the slot is valid for an address only if CpuAdr was the same at both points
+    process( memclk )
+    begin
+        if( memclk'event and memclk = '1' )then
+            if( wave_slot = '1' )then
+                null;                                                       -- OPL4 wave slot: not a cpu slot
+            elsif( ff_sdr_seq = "000" )then
+                sdr_slot_adr <= CpuAdr_r;
+            end if;
+            if( wave_slot = '1' )then
+                null;
+            elsif( ff_sdr_seq = "010" )then
+                if( sdr_slot_adr = CpuAdr_r )then
+                    sdr_slot_ok <= '1';
+                else
+                    sdr_slot_ok <= '0';
+                end if;
+                if( SdrSta = "101" and RstSeq(4 downto 3) = "11" )then        -- write cpu
+                    if( sdr_slot_adr = CpuAdr_r )then
+                        sdr_wr_ok <= '1';
+                    else
+                        sdr_wr_ok <= '0';
+                    end if;
+                    sdr_wr_adr <= CpuAdr_r;
+                    sdr_wr_dat <= dbo;
+                    sdr_rd_ok  <= '0';
+                end if;
+            end if;
+            if( ff_sdr_seq = "101" and SdrSta = "100" and wave_slot = '0' )then  -- read cpu
+                sdr_rd_adr <= sdr_slot_adr;
+                sdr_rd_ok  <= sdr_slot_ok;
+            end if;
+        end if;
+    end process;
+
     -- Data read latch for CPU
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
             if( ff_sdr_seq = "101" )then
-                if( SdrSta = "100" )then                        -- read cpu
-                    if( CpuAdr(0) = '0' )then
+                if( SdrSta = "100" and wave_slot = '0' )then  -- read cpu (not in an OPL4 wave slot)
+                    if( CpuAdr_r(0) = '0' )then
                         RamDbi <= pMemDat(  7 downto 0 );
                     else
                         RamDbi <= pMemDat( 15 downto 8 );
@@ -2545,7 +3211,7 @@ begin
         if( memclk'event and memclk = '1' )then
             case ff_sdr_seq is
                 when "000" =>
-                    if( VideoDHClk = '1' or RstSeq(4 downto 3) /= "11" )then
+                    if( VideoDHClk = '1' or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )then -- in reset the VDP dot clock is stopped
                         ff_sdr_seq <= "001";
                     end if;
                 when "111" =>
@@ -2565,7 +3231,7 @@ begin
         elsif( clk21m'event and clk21m = '1' )then
             if( RamReq = '0' )then
                 RamAck <= '0';
-            elsif( VideoDLClk = '0' and VideoDHClk = '1' )then
+            elsif( VideoDLClk = '0' and VideoDHClk = '1' and wave_slot = '0' )then     -- not in an OPL4 wave slot
                 RamAck <= '1';
             end if;
             if( VideoDLClk = '0' )then
@@ -2620,12 +3286,12 @@ begin
     U01 : t80a
         port map(
             RESET_n     => (not reset),
-            R800_mode   => portF4_mode,         -- '0' => no MULU, '1' => MULU with LEs, portF4_mode = auto selection with LEs
+            R800_mode   => '0',                 -- the Z80 (the R800 is U01_R8)
             CLK_n       => iCpuClk,
             WAIT_n      => wait_n_s,
             INT_n       => pSltInt_n,
             NMI_n       => '1',
-            BUSRQ_n     => '1',
+            BUSRQ_n     => z80_busrq_n,
             M1_n        => CpuM1_n,
             MREQ_n      => pSltMerq_n,
             IORQ_n      => pSltIorq_n,
@@ -2633,7 +3299,7 @@ begin
             WR_n        => pSltWr_n,
             RFSH_n      => CpuRfsh_n,
             HALT_n      => open,
-            BUSAK_n     => open,
+            BUSAK_n     => z80_busak_n,
             A           => pSltAdr,
             D           => pSltDat
         );
@@ -2673,7 +3339,7 @@ begin
 --        port map(_CK, EPC_CS, EPC_DI, EPC_OE, EPC_DO);
 
     U05 : mapper
-        port map(clk21m, reset, clkena, MapReq, open, mem, wrt, adr, MapDbi, dbo,
+        port map(clk21m, reset, MapReq, open, mem, wrt, adr, MapDbi, dbo,
                         MapRam, MapWrt, MapAdr, RamDbi, open);
 
     U06_1 : eseps2
@@ -2727,7 +3393,7 @@ begin
         port map(clk21m, '0', rtcena, RtcReq, open, wrt, adr, RtcDbi, dbo);
 
     U08 : kanji
-        port map(clk21m, reset, clkena, KanReq, open, wrt, adr, KanDbi, dbo,
+        port map(clk21m, reset, KanReq, open, wrt, adr, KanDbi, dbo,
                         KanRom, KanAdr, RamDbi, open);
 
     U20 : vdp
@@ -2740,20 +3406,27 @@ begin
         port map(clk21m, reset, VdpReq, open, wrt, adr, VdpDbi, dbo, pVdpInt_n,
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
-                        VideoDHClk, VideoDLClk, BLANK_o, Reso_v, ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y);
+                        VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
+                        vdp_wait_n_s, vdp_busy);
 
     U21 : vencode
         port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,
                         videoY, videoC, videoV);
 
-    U30_1 : psg
+    U30_1 : msx_psg
+        generic map(psg_ym_g)
         port map(clk21m, reset, clkena, PsgReq, open, wrt, adr, PsgDbi, dbo,
                         w_pJoyA_in, w_pJoyA_out_m, w_pStrA_m, w_pJoyB_in, pJoyB_out, pStrB, Kana, CmtIn, w_key_mode, PsgAmp);
 
     psg2_u : if use_dualpsg_g generate
-        U30_2 : psg
+        U30_2 : msx_psg
+            generic map(psg_ym_g)
             port map(clk21m, reset, clkena, Psg2Req, open, wrt, adr, Psg2Dbi, dbo,
                             "111111", open, open, "111111", open, open, open, '0', '0', Psg2Amp);
+    end generate;
+
+    psg2_off : if not use_dualpsg_g generate
+        Psg2Amp <= (others => '0');
     end generate;
 
     U31_1 : megaram
@@ -2774,7 +3447,12 @@ begin
 
 
     opll_o <= OpllWav;
-	 psg_o <=  (('1'& PsgAmp ) + (KeyClick & "00000")) + Psg2Amp;
+	 -- unipolar PSG level (the mixer removes the DC): no offset, PSG and PSG2 at full resolution
+	 -- (0..12285 each) and the key click at 2048, 16 bits so that the sum does not wrap
+	 psg_o <=  ('0' & PsgAmp) + ('0' & Psg2Amp) + ("0000" & KeyClick & "00000000000");
+	 PsgVol_o  <= PsgVol;
+	 SccVol_o  <= SccVol;
+	 OpllVol_o <= OpllVol;
 	 vol_o <= MstrVol;
 	 
     U34 : system_timer
@@ -2790,6 +3468,9 @@ begin
         );
 
     U35 : switched_io_ports
+        generic map(
+            use_wifi_g      => use_wifi_g
+        )
         port map(
             clk21m          => clk21m           ,
             reset           => reset            ,
@@ -2802,23 +3483,26 @@ begin
             dbo             => dbo              ,
 
             io40_n          => io40_n           ,
-            io41_id212_n    => io41_id212_n     ,   -- here to reduce LEs
+            io41_id212_n    => io41_id212_n     ,
             io42_id212      => io42_id212       ,
             io43_id212      => io43_id212       ,
             io44_id212      => io44_id212       ,
-            OpllVol         => OpllVol          ,
-            SccVol          => SccVol           ,
+
             PsgVol          => PsgVol           ,
             MstrVol         => MstrVol          ,
+            OpllVol         => OpllVol          ,
+            SccVol          => SccVol           ,
+
             CustomSpeed     => CustomSpeed      ,
             tMegaSD         => tMegaSD          ,
-            tPanaRedir      => tPanaRedir       ,   -- here to reduce LEs
+            tPanaRedir      => tPanaRedir       ,
             VdpSpeedMode    => VdpSpeedMode     ,
             V9938_n         => V9938_n          ,
-            Mapper_req      => Mapper_req       ,   -- here to reduce LEs
+            Mapper_req      => Mapper_req       ,
             Mapper_ack      => Mapper_ack       ,
-            MegaSD_req      => MegaSD_req       ,   -- here to reduce LEs
+            MegaSD_req      => MegaSD_req       ,
             MegaSD_ack      => MegaSD_ack       ,
+
             io41_id008_n    => io41_id008_n     ,
             swioKmap        => swioKmap         ,
             CmtScro         => CmtScro          ,
@@ -2826,18 +3510,52 @@ begin
             LightsMode      => LightsMode       ,
             Red_sta         => Red_sta          ,
             LastRst_sta     => LastRst_sta      ,
-            RstReq_sta      => RstReq_sta       ,   -- here to reduce LEs
+            RstReq_sta      => RstReq_sta       ,
             Blink_ena       => Blink_ena        ,
+
             pseudoStereo    => pseudoStereo     ,
             extclk3m        => extclk3m         ,
             ntsc_pal_type   => ntsc_pal_type    ,
             forced_v_mode   => forced_v_mode    ,
+
             right_inverse   => right_inverse    ,
-            vram_slot_ids   => vram_slot_ids    ,
-            DefKmap         => DefKmap          ,   -- here to reduce LEs
+            RatioMode       => RatioMode        ,
+            centerYJK_R25_n => centerYJK_R25_n  ,
+            legacy_sel      => legacy_sel       ,
+            iSlt1_linear    => iSlt1_linear     ,
+            iSlt2_linear    => iSlt2_linear     ,
+
+            btn_scan        => '1'              ,
+            vga_scanlines   => vga_scanlines    ,
+            iPsg2_ena       => iPsg2_ena        ,
+            SdrSize         => SdrSize          ,
+            bios_reload_ack => bios_reload_ack  ,
+            Mapper0_req     => Mapper0_req      ,
+            Slot0_req       => Slot0_req        ,
+
+            xmr_ena         => xmr_ena          ,
+            SdrSizeAux      => SdrSizeAux       ,
+            OFFSET_Y        => OFFSET_Y         ,
+
+            spMaxSpr        => spMaxSpr         ,
+            vga_int_field   => vga_int_field    ,
+            low_scale_n     => low_scale_n      ,
+            cbios_mode      => cbios_mode       ,
+            Mapper0_ack     => Mapper0_ack      ,
+            Slot0Mode       => Slot0Mode        ,
+            safe_mode       => safe_mode        ,
+            portF2_ena      => portF2_ena       ,
 
             ff_dip_req      => ff_dip_req       ,
-            ff_dip_ack      => ff_dip_ack       ,   -- here to reduce LEs
+            ff_dip_ack      => ff_dip_ack       ,
+
+            vram_slot_ids   => vram_slot_ids    ,
+            DefKmap         => DefKmap          ,
+
+            ff_ldbios_n     => ff_ldbios_n      ,
+            VDP_ID          => VDP_ID           ,
+            JIS2_ena        => JIS2_ena         ,
+            portF4_mode     => portF4_mode      ,
 
             Scro            => Scro             ,
             ff_Scro         => ff_Scro          ,
@@ -2848,42 +3566,143 @@ begin
             LevCtrl         => LevCtrl          ,
             GreenLvEna      => GreenLvEna       ,
 
-            cold_reset_comb => cold_reset_comb  ,
-            warm_reset_comb => warm_reset_comb  ,
             swioRESET_n     => swioRESET_n      ,
             warmRESET       => warmRESET        ,
-            WarmMSXlogo     => WarmMSXlogo      ,   -- here to reduce LEs
-
-            JIS2_ena        => JIS2_ena         ,
-            portF4_mode     => portF4_mode      ,
-            ff_ldbios_n     => ff_ldbios_n      ,
-            bios_reload_ack => bios_reload_ack  ,
-
-            RatioMode       => RatioMode        ,
-            centerYJK_R25_n => centerYJK_R25_n  ,
-            legacy_sel      => legacy_sel       ,
-            iSlt1_linear    => iSlt1_linear     ,
-            iSlt2_linear    => iSlt2_linear     ,
-            Slot0_req       => Slot0_req        ,   -- here to reduce LEs
-            Slot0Mode       => Slot0Mode        ,
-            vga_scanlines   => vga_scanlines    ,
-            btn_scan        => btn_scan         ,
-            Mapper0_req     => Mapper0_req      ,   -- here to reduce LEs
-            Mapper0_ack     => Mapper0_ack      ,
-            iPsg2_ena       => iPsg2_ena        ,
-            cbios_mode      => cbios_mode       ,
-            xmr_ena         => xmr_ena          ,
-
-            SdrSize         => SdrSize          ,
-            VDP_ID          => VDP_ID           ,
-            OFFSET_Y        => OFFSET_Y
+            WarmMSXlogo     => WarmMSXlogo      ,
+            full_reset_comb => '0'              ,   -- reset combinations handled below (comb_reset_n)
+            cold_reset_comb => '0' 
         );
 
     U40 : tr_pcm
         port map(clk21m, reset, tr_pcm_req, open, wrt, adr(0), tr_pcm_dbi, dbo,
                         tr_pcm_wave_in, trPcm_o);
 
-    tr_pcm_wave_in <= (others => '0');
+    -- turboR PCM sampler (microphone of the A1ST/GT): the 1-bit audio input (ear_i)
+    tr_pcm_wave_in <= X"C0" when( ear_i = '1' )else X"40";
+
+    -- OPL4 wave part (MoonSound, ZEMMIX-0au.3 / .6): srg320's YMF278B on clk_opl, its
+    -- registers on 7E-7Fh, every C4-C7h access seen too (NEW2, LD2), wave memory in the SDRAM
+    opl4_a  <= "0" & adr(1 downto 0)    when( adr(7) = '1' )else       -- C4-C7h -> 0-3
+               "10" & adr(0);                                          -- 7E-7Fh -> 4-5
+    opl4_cs <= '1' when( iSltIorq_n = '0' and opl3_enabled = '1' and use_opl4_g and
+                         (adr(7 downto 2) = "110001" or adr(7 downto 1) = "0111111") )else '0';
+
+    opl4_u : if use_opl4_g generate
+        u_opl4 : opl4_wave
+            port map(
+                clk_bus     => clk21m,
+                reset_bus   => reset,
+                bus_cs      => opl4_cs,
+                bus_a       => opl4_a,
+                bus_di      => dbo,
+                bus_rd_n    => xSltRd_n,
+                bus_wr_n    => xSltWr_n,
+                bus_do      => opl4_do,
+                bus_status  => opl4_status,
+                bus_wait_n  => opl4_wait_n,
+                mem_req_t   => wt_req_t,
+                mem_done_t  => wt_done_t,
+                mem_we      => wt_we,
+                mem_adr     => wt_adr,
+                mem_wdat    => wt_wdat,
+                mem_rdat    => wt_rdat,
+                pcm_l       => opl4_l,
+                pcm_r       => opl4_r,
+                dbg_wr      => romload_wr24,
+                dbg_flags   => romload_flags,
+                dbg_rcv     => romload_rcv,
+                dbg_lost    => romload_lost,
+                clk_eng     => clk_opl
+            );
+    end generate;
+
+    opl4_off : if not use_opl4_g generate
+        wt_req_t    <= '0';
+        wt_we       <= '0';
+        wt_adr      <= (others => '0');
+        wt_wdat     <= (others => '0');
+        opl4_l      <= (others => '0');
+        opl4_r      <= (others => '0');
+    end generate;
+
+    romload_wr24 <= "00" & romload_wr;
+
+    -- V9990 (GFX9000, ZEMMIX-1os.5): ports 60h-6Fh to v9990_core (in zemmix.sv, next to
+    -- its VRAM in the 2nd SDRAM and the video), the cpu waits until it has the byte
+    v99_cs <= '1' when( iSltIorq_n = '0' and adr(7 downto 4) = "0110" )else '0';
+
+    v99_u : if use_v9990_g generate
+        u_v99bus : entity work.v9990_bus
+            port map(
+                clk21m      => clk21m,
+                reset       => reset,
+                cs          => v99_cs,
+                rd_n        => xSltRd_n,
+                wr_n        => xSltWr_n,
+                adr         => adr(3 downto 0),
+                dbo         => dbo,
+                dbi         => v99_dbi_s,
+                wait_n      => v99_wait_n,
+                int_n       => v99_int_s,
+                v_clk       => v99_clk,
+                v_reset_n   => v99_reset_n,
+                v_req       => v99_req,
+                v_wrt       => v99_wrt,
+                v_adr       => v99_adr,
+                v_dbo       => v99_dbo,
+                v_ack       => v99_ack,
+                v_dbi       => v99_dbi,
+                v_int_n     => v99_int_n
+            );
+    end generate;
+
+    v99_off : if not use_v9990_g generate
+        v99_reset_n <= '0';
+        v99_req     <= '0';
+        v99_wrt     <= '0';
+        v99_adr     <= (others => '0');
+        v99_dbo     <= (others => '0');
+    end generate;
+
+    -- diagnostics of the ZEMMIX.ROM load (regs F0h-F3h, FAh-FFh of 7Eh/7Fh):
+    -- RstSeq when the download starts (bits 7-3) and a wave slot seen during it (bit 0)
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            rom_dl_d <= rom_dl_i;
+            if( rom_dl_i = '1' and rom_dl_d = '0' )then
+                romload_flags <= RstSeq & "000";
+            elsif( rom_dl_i = '1' and wave_slot = '1' )then
+                romload_flags(0) <= '1';
+            end if;
+        end if;
+    end process;
+
+    -- ZEMMIX.ROM (YRW801, sent by the firmware when the core starts) to 000000h of
+    -- the wave memory, through a FIFO: the SDRAM may not be ready yet (ZEMMIX-0au.5)
+    u_romload : entity work.opl4_romload
+        port map(
+            clk21m      => clk21m,
+            dl          => rom_dl_i,
+            dl_wr       => rom_wr_i,
+            dl_dat      => rom_dat_i,
+            c_req_t     => wt_req_t,
+            c_done_t    => wt_done_t,
+            c_we        => wt_we,
+            c_adr       => wt_adr,
+            c_wdat      => wt_wdat,
+            c_rdat      => wt_rdat,
+            m_req_t     => wave_req_t,
+            m_done_t    => wave_done_t,
+            m_we        => wave_we,
+            m_adr       => wave_adr,
+            m_wdat      => wave_wdat,
+            m_rdat      => wave_rdat,
+            rcv_cnt     => romload_rcv,
+            lost_cnt    => romload_lost,
+            wr_adr      => romload_wr,
+            loading     => open
+        );
 
     wifi : if use_wifi_g generate
         uwifi : work.wifi
@@ -2922,14 +3741,14 @@ begin
             );
     end generate;
 
-    opl3_u : if use_opl3_g generate
+    opl3_u : if use_opl3_g and not opl3_fpga_g generate
         opl3_1 : opl3
         generic map(
-            OPLCLK              => 86000000             -- opl_clk in Hz
+            OPLCLK              => opl3_clk_g           -- opl_clk in Hz
         )
         port map(
             clk                 => clk21m,
-            clk_opl             => memclk,              -- 86MHz
+            clk_opl             => clk_opl,             -- CLOCK_50 or memclk
             rst_n               => (not reset),
             irq_n               => opl3_Int_n,
 
@@ -2944,7 +3763,29 @@ begin
         );
     end generate;
 
-    opl3_ce <= '1' when( adr(  7 downto 3 ) = "11000"   and iSltIorq_n = '0' and xSltWr_n = '0' and use_opl3_g )else    -- OPL3 ports C0-C3h / C4-C7h
+    opl3fpga_u : if use_opl3_g and opl3_fpga_g generate
+        opl3fpga_1 : opl3fpga_msx
+        generic map(
+            OPLCLK              => opl3_clk_g           -- must be 50MHz (CLOCK_50)
+        )
+        port map(
+            clk                 => clk21m,
+            clk_opl             => clk_opl,
+            rst_n               => (not reset),
+            irq_n               => opl3_Int_n,
+
+            addr                => adr(1 downto 0),
+            dout                => opl3_dout_s,
+            din                 => dbo,
+            we                  => opl3_ce,
+            mono                => '0',
+
+            sample_l            => opl3_l,
+            sample_r            => opl3_r
+        );
+    end generate;
+
+    opl3_ce <= '1' when( adr(  7 downto 2 ) = "110001"  and iSltIorq_n = '0' and xSltWr_n = '0' and use_opl3_g )else    -- OPL3 ports C4-C7h (MoonSound FM)
 --             '1' when( adr(  7 downto 1 ) = "0111110" and iSltIorq_n = '0' and xSltWr_n = '0' and use_opl3_g          -- OPLL ports 7C-7Dh via OPL3
                '0';
 
@@ -2979,7 +3820,22 @@ begin
                     w_PpiPortB( 7 downto 1 ) & (w_PpiPortB(0) or af_mask);
 
     -- Cold Reset and Warm Reset combinations
-    cold_reset_comb  <=      vFkeys(7)  and vFkeys(6) and (vFkeys(0) xor Fkeys(0)); -- [LCTRL+SHIFT+F12]
-    warm_reset_comb  <= (not vFkeys(7)) and vFkeys(6) and (vFkeys(0) xor Fkeys(0)); -- [LCTRL+F12]
+    full_reset_comb  <=      vFkeys(7)  and vFkeys(6) and (vFkeys(0) xor Fkeys(0));     -- [LCTRL+SHIFT+F12]
+    cold_reset_comb  <= (not vFkeys(7)) and vFkeys(6) and (vFkeys(0) xor Fkeys(0));     -- [LCTRL+F12]
+
+    -- Reset combinations: a cold reset as before ocm-pld-dev v3.9.2, whatever
+    -- the reset key lock of port $43 (bit 5, not initialized by the new
+    -- switched_io_ports) and without OCM-BIOS reloading (the BIOS comes from
+    -- the MiST / SiDi firmware here).
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            if( reset = '1' )then
+                comb_reset_n <= '1';                                                    -- end of the reset pulse
+            elsif( full_reset_comb = '1' or cold_reset_comb = '1' )then
+                comb_reset_n <= '0';
+            end if;
+        end if;
+    end process;
 
 end RTL;

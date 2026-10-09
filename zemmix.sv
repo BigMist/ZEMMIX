@@ -172,36 +172,26 @@ localparam bit BIG_OSD = 0;
 `define SEP
 `endif
 
-// remove this if the 2nd chip is actually used
-`ifdef DUAL_SDRAM
-assign SDRAM2_A = 13'hZZZZ;
-assign SDRAM2_BA = 0;
-assign SDRAM2_DQML = 0;
-assign SDRAM2_DQMH = 0;
-assign SDRAM2_CKE = 0;
-assign SDRAM2_CLK = 0;
-assign SDRAM2_nCS = 1;
-assign SDRAM2_DQ = 16'hZZZZ;
-assign SDRAM2_nCAS = 1;
-assign SDRAM2_nRAS = 1;
-assign SDRAM2_nWE = 1;
-`endif
-
 `include "build_id.v"
 
-// remove this if the 2nd chip is actually used
+// 2nd SDRAM (SiDi128 only): the OPL4 wave memory and the V9990 VRAM, the
+// controller is further down (sdram2, after the clocks)
 `ifdef DUAL_SDRAM
-assign SDRAM2_A = 13'hZZZZ;
-assign SDRAM2_BA = 0;
-assign SDRAM2_DQML = 0;
-assign SDRAM2_DQMH = 0;
-assign SDRAM2_CKE = 0;
-assign SDRAM2_CLK = 0;
-assign SDRAM2_nCS = 1;
-assign SDRAM2_DQ = 16'hZZZZ;
-assign SDRAM2_nCAS = 1;
-assign SDRAM2_nRAS = 1;
-assign SDRAM2_nWE = 1;
+localparam SDRAM2 = "true";
+`else
+localparam SDRAM2 = "false";
+`endif
+
+// V9990 (GFX9000, ports 60h-6Fh): its 512 KB VRAM is in the 2nd SDRAM
+`ifdef V9990
+`ifndef DUAL_SDRAM
+v9990_needs_DUAL_SDRAM v9990_needs_DUAL_SDRAM();   // no such module: build error
+`endif
+localparam V9990 = "true";
+`define V99_OSD "ODE,Video out (GFX9000),Auto,V9958,V9990;",
+`else
+localparam V9990 = "false";
+`define V99_OSD
 `endif
 
 `ifdef USE_HDMI
@@ -228,6 +218,9 @@ localparam CONF_STR = {
 	"P1O7,RAM,2048kB,4096kB;",
 	"P1O8,internal MegaSD,Off,on;",
    "O9,Tape sound,OFF,ON;",
+   "OAB,Scanlines,Off,25%,50%,75%;",
+   "OC,MoonSound (OPL3/OPL4),On,Off;",
+   `V99_OSD
    "T0,Reset;",
 	"V,v1.0.",`BUILD_DATE
 };
@@ -236,6 +229,7 @@ localparam CONF_STR = {
 wire clk_sys;
 wire memclk;
 wire clk_hdmi;
+wire clk_v99;
 wire locked;
 
 pll pll
@@ -249,6 +243,9 @@ pll pll
 	.c1(memclk),
 `ifdef USE_HDMI
 		.c2(clk_hdmi),
+`endif
+`ifdef V9990
+	.c3(clk_v99),                                // 42.95 MHz, no phase shift: the V9990
 `endif
 
 	.locked(locked)
@@ -280,6 +277,203 @@ sdramclk_ddr
 	.sclr(1'b0),
 	.sset(1'b0)
 );
+//////////////////   2nd SDRAM (SiDi128)   ///////////////////
+// OPL4 wave memory from emsx_top (opl4_wave_ext_g): byte address, 16-bit words
+wire        wave_req_t, wave_we;
+wire        wave_done_t;
+wire [21:0] wave_adr;
+wire  [7:0] wave_wdat;
+wire [15:0] wave_rdat;
+
+// The OPL4 wave memory (port 0) and the V9990 VRAM (port 1), misc/sdram2.sv:
+// same timing as the SDRAM of emsx_top (memclk, the clock inverted).  Reset
+// only by the PLL lock: the wave memory keeps ZEMMIX.ROM over the MSX resets.
+`ifdef DUAL_SDRAM
+altddio_out
+#(
+	.extend_oe_disable("OFF"),
+	.intended_device_family("Cyclone 10 LP"),
+	.invert_output("OFF"),
+	.lpm_hint("UNUSED"),
+	.lpm_type("altddio_out"),
+	.oe_reg("UNREGISTERED"),
+	.power_up_high("OFF"),
+	.width(1)
+)
+sdram2clk_ddr
+(
+	.datain_h(1'b0),
+	.datain_l(1'b1),
+	.outclock(memclk),
+	.dataout(SDRAM2_CLK),
+	.aclr(1'b0),
+	.aset(1'b0),
+	.oe(1'b1),
+	.outclocken(1'b1),
+	.sclr(1'b0),
+	.sset(1'b0)
+);
+
+wire        sdram2_ready;
+// V9990 VRAM (misc/v9990_vram_sdram.sv, below): reads are lines of 4 words
+wire        v99_s_req, v99_s_ack, v99_s_we;
+wire  [1:0] v99_s_be;
+wire [23:0] v99_s_addr;
+wire [15:0] v99_s_din;
+wire [63:0] v99_s_dout;
+
+sdram2 sdram2
+(
+	.clk        ( memclk          ),
+	.reset      ( ~locked         ),
+	.ready      ( sdram2_ready    ),
+
+	// OPL4 wave memory
+	.p0_req     ( wave_req_t      ),
+	.p0_ack     ( wave_done_t     ),
+	.p0_we      ( wave_we         ),
+	.p0_be      ( {wave_adr[0], ~wave_adr[0]} ),
+	.p0_addr    ( {3'b000, wave_adr[21:1]} ),         // bank 0, 4 MB
+	.p0_din     ( {wave_wdat, wave_wdat} ),
+	.p0_dout    ( wave_rdat       ),
+
+	// V9990 VRAM
+	.p1_req     ( v99_s_req       ),
+	.p1_ack     ( v99_s_ack       ),
+	.p1_we      ( v99_s_we        ),
+	.p1_be      ( v99_s_be        ),
+	.p1_addr    ( v99_s_addr      ),
+	.p1_din     ( v99_s_din       ),
+	.p1_dout    ( v99_s_dout      ),
+
+	.SDRAM_A    ( SDRAM2_A        ),
+	.SDRAM_DQ   ( SDRAM2_DQ       ),
+	.SDRAM_DQML ( SDRAM2_DQML     ),
+	.SDRAM_DQMH ( SDRAM2_DQMH     ),
+	.SDRAM_nWE  ( SDRAM2_nWE      ),
+	.SDRAM_nCAS ( SDRAM2_nCAS     ),
+	.SDRAM_nRAS ( SDRAM2_nRAS     ),
+	.SDRAM_nCS  ( SDRAM2_nCS      ),
+	.SDRAM_BA   ( SDRAM2_BA       ),
+	.SDRAM_CKE  ( SDRAM2_CKE      )
+);
+
+`ifndef V9990
+assign v99_s_req  = 1'b0;
+assign v99_s_we   = 1'b0;
+assign v99_s_be   = 2'b11;
+assign v99_s_addr = 24'd0;
+assign v99_s_din  = 16'd0;
+`endif
+`else
+assign wave_done_t = 1'b0;
+assign wave_rdat   = 16'hFFFF;
+`endif
+
+//////////////////   V9990 (GFX9000), SiDi128   ///////////////////
+// v9990/rtl/v9990_core on clk_v99 (42.95 MHz), ports 60h-6Fh from emsx_top
+// (misc/v9990_bus.vhd), its VRAM in bank 2 of the 2nd SDRAM (port 1 of sdram2)
+// through a cache of 4-word lines (v9990/rtl/v9990_vram_cache.vhd,
+// misc/v9990_vram_sdram.sv).  Video: to the mist_video chain (VIDEO, below).
+wire        v99_reset_n, v99_req, v99_wrt, v99_ack, v99_int_n;
+wire  [3:0] v99_adr;
+wire  [7:0] v99_dbo, v99_dbi;
+wire  [7:0] v99_red, v99_grn, v99_blu;
+wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp;
+
+`ifdef V9990
+wire        v99_vram_req, v99_vram_we;
+wire  [1:0] v99_vram_be;
+wire [17:0] v99_vram_addr;
+wire [15:0] v99_vram_wdata, v99_vram_rdata;
+wire        v99_vram_ack;
+
+wire        v99_m_req, v99_m_we, v99_m_ack;
+wire  [1:0] v99_m_be;
+wire [17:0] v99_m_addr;
+wire [15:0] v99_m_wdata;
+wire [63:0] v99_m_rdata;
+
+// not reset with the V9990: an access cut short would get the ack of the
+// next one (the VRAM changes only through it, the lines stay right)
+v9990_vram_cache #(.LINES(4)) v9990_cache
+(
+	.clk     ( clk_v99        ),
+	.reset_n ( 1'b1           ),
+	.req     ( v99_vram_req   ),
+	.we      ( v99_vram_we    ),
+	.be      ( v99_vram_be    ),
+	.addr    ( v99_vram_addr  ),
+	.wdata   ( v99_vram_wdata ),
+	.ack     ( v99_vram_ack   ),
+	.rdata   ( v99_vram_rdata ),
+	.m_req   ( v99_m_req      ),
+	.m_we    ( v99_m_we       ),
+	.m_be    ( v99_m_be       ),
+	.m_addr  ( v99_m_addr     ),
+	.m_wdata ( v99_m_wdata    ),
+	.m_ack   ( v99_m_ack      ),
+	.m_rdata ( v99_m_rdata    )
+);
+
+v9990_vram_sdram v9990_vram
+(
+	.clk    ( clk_v99        ),
+	.req    ( v99_m_req      ),
+	.we     ( v99_m_we       ),
+	.be     ( v99_m_be       ),
+	.addr   ( v99_m_addr     ),
+	.wdata  ( v99_m_wdata    ),
+	.ack    ( v99_m_ack      ),
+	.rdata  ( v99_m_rdata    ),
+	.s_req  ( v99_s_req      ),
+	.s_ack  ( v99_s_ack      ),
+	.s_we   ( v99_s_we       ),
+	.s_be   ( v99_s_be       ),
+	.s_addr ( v99_s_addr     ),
+	.s_din  ( v99_s_din      ),
+	.s_dout ( v99_s_dout     )
+);
+
+v9990_core v9990
+(
+	.clk          ( clk_v99         ),
+	.reset_n      ( v99_reset_n     ),
+
+	.req_i        ( v99_req         ),
+	.wrt_i        ( v99_wrt         ),
+	.adr_i        ( v99_adr         ),
+	.dbo_i        ( v99_dbo         ),
+	.ack_o        ( v99_ack         ),
+	.dbi_o        ( v99_dbi         ),
+	.int_n_o      ( v99_int_n       ),
+
+	.vram_req_o   ( v99_vram_req    ),
+	.vram_we_o    ( v99_vram_we     ),
+	.vram_be_o    ( v99_vram_be     ),
+	.vram_addr_o  ( v99_vram_addr   ),
+	.vram_wdata_o ( v99_vram_wdata  ),
+	.vram_ack_i   ( v99_vram_ack    ),
+	.vram_rdata_i ( v99_vram_rdata  ),
+
+	.red_o        ( v99_red         ),
+	.grn_o        ( v99_grn         ),
+	.blu_o        ( v99_blu         ),
+	.hsync_n_o    ( v99_hsync_n     ),
+	.vsync_n_o    ( v99_vsync_n     ),
+	.hblank_o     ( v99_hblank      ),
+	.vblank_o     ( v99_vblank      ),
+	.interlace_o  (                 ),
+	.disp_en_o    ( v99_disp        ),
+	.vid_x_o      (                 ),
+	.vid_y_o      (                 )
+);
+`else
+assign v99_ack   = 1'b0;
+assign v99_dbi   = 8'hFF;
+assign v99_int_n = 1'b1;
+`endif
+
 //////////////////   RP2040 pin reflection   ///////////////////
 
 `ifdef PIN_REFLECTION
@@ -356,6 +550,7 @@ user_io #(.STRLEN($size(CONF_STR)>>3), .PS2DIV(800), .FEATURES(32'h0 | (BIG_OSD 
 	.sd_ack_conf(sd_ack_conf),
 	.sd_sdhc(sd_sdhc),
 	.sd_lba(sd_lba),
+	.leds(8'd0),                          // keyboard LEDs to the firmware: not used
 	.sd_rd(sd_rd),
 	.sd_wr(sd_wr),
 	.sd_ack(sd_ack),
@@ -398,6 +593,9 @@ wire  [7:0] ioctl_dout;
 wire        ioctl_download;
 wire  [5:0] ioctl_index;
 wire  [1:0] ioctl_ext_index;
+
+// ZEMMIX.ROM (YRW801) download, data_io index 0: the MSX in reset, the SDRAM for the loader
+wire rom_dl = ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd0;
 
 data_io data_io
 (
@@ -458,17 +656,28 @@ wire       msx_ps2_kbd_data = (ps2k_d == 1'b0 ? ps2k_d : 1'bZ);
 reg  [7:0] dipsw;
 wire [7:0] leds;
 
-reg reset;
+// Reset:
+//  * power on: reset for a fixed 3.1 s after the PLL lock, as mist-devel/MSX_MiST
+//    4d2e241 (cold boot with a black HDMI screen on the SiDi128: its IT6613 is set up
+//    by the ARM over I2C after the power on); a PLL glitch starts it again
+//  * OSD / button reset and img_mounted: 1.56 s as before (the OCM needs the long
+//    reset to start again with the SD / image; a 98 ms one did not reset nor take
+//    a newly mounted image)
+//  * the ZEMMIX.ROM download (rom_dl) and the cartridge reset (BUS_nRESET)
+reg  [25:0] pw_cnt = 26'h3FFFFFF;               // 2^26 / 21.48 MHz = 3.1 s
 reg  [27:0] img_reset_cnt = 0;
+reg reset = 1'b1;
 `ifdef USE_EXTBUS	
-wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked | !BUS_nRESET;
+wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | !BUS_nRESET | rom_dl;
 `else
-wire resetW = status[0] | buttons[1] | img_reset_cnt != 0 | !locked;
+wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | rom_dl;
 `endif
 
 always @(posedge clk_sys) begin
+	if (~locked)                pw_cnt <= 26'h3FFFFFF;
+	else if (pw_cnt != 26'd0)   pw_cnt <= pw_cnt - 26'd1;
 	if (img_reset_cnt != 0) img_reset_cnt <= img_reset_cnt - 1'd1;
-	if (img_mounted) img_reset_cnt <= 28'h2000000;
+	if (img_mounted | status[0]) img_reset_cnt <= 28'h2000000;
 	reset <= resetW;
 	dipsw <= {~status[8], ~status[7], ~status[6:5], ~status[4], ~status[3],1'b0 , ~status[1]};
 end
@@ -542,16 +751,34 @@ wire cpuClk;
 localparam true = "true";
 localparam false = "false";
 
+// OPL3 clock: 50MHz as the OPL3 was designed for, memclk without CLOCK_50
+`ifdef USE_CLOCK_50
+localparam OPL3_FPGA = "true";   // OPL3 of Greg Taylor (misc/opl3fpga), needs 50MHz
+localparam OPL3_CLK = 50000000;
+wire clk_opl = CLOCK_50;
+`else
+localparam OPL3_FPGA = "false";  // opl3sw (misc/opl3) on memclk
+localparam OPL3_CLK = 86000000;
+wire clk_opl = memclk;
+`endif
+
 emsx_top #(
     .use_wifi_g(true),   // activar interfaz UNAPI
     .use_midi_g(true),   // activar interfaz midi
     .use_opl3_g(true),  // false. cambiar a true para activar OPL3
-    .use_dualpsg_g(false)// activar doble chip PSG
+    .opl3_fpga_g(OPL3_FPGA),
+    .use_opl4_g(OPL3_FPGA),    // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
+    .opl4_wave_ext_g(SDRAM2),  // OPL4 wave memory in the 2nd SDRAM instead of the top 4 MB of the SDRAM
+    .use_v9990_g(V9990),       // V9990 (GFX9000), ports 60h-6Fh
+    .use_dualpsg_g(false),// activar doble chip PSG
+    .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
+    .opl3_clk_g(OPL3_CLK)
 ) emsx (
 
 //      -- Clock, Reset ports
         .clk21m     (clk_sys),
         .memclk     (memclk),
+        .clk_opl    (clk_opl),
         .pSltRst_n  (~reset),
 
 //       -- MSX cartridge
@@ -627,8 +854,29 @@ emsx_top #(
         .pVideoVS_n (VSync),    // VSync(RGB15K, VGA31K)
 		  .blank_o    (blank),
 
+		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
+		  .rom_dl_i    (rom_dl),                                              // ZEMMIX.ROM (YRW801) sent by the firmware
+		  .rom_wr_i    (ioctl_wr),
+		  .rom_dat_i   (ioctl_dout),
+		  .wave_ext_req_t  (wave_req_t),
+		  .wave_ext_done_t (wave_done_t),
+		  .wave_ext_we     (wave_we),
+		  .wave_ext_adr    (wave_adr),
+		  .wave_ext_wdat   (wave_wdat),
+		  .wave_ext_rdat   (wave_rdat),
+		  .v99_clk         (clk_v99),
+		  .v99_reset_n     (v99_reset_n),
+		  .v99_req         (v99_req),
+		  .v99_wrt         (v99_wrt),
+		  .v99_adr         (v99_adr),
+		  .v99_dbo         (v99_dbo),
+		  .v99_ack         (v99_ack),
+		  .v99_dbi         (v99_dbi),
+		  .v99_int_n       (v99_int_n),
 		  .opl3_l      (opl3_l),
 		  .opl3_r      (opl3_r),
+		  .opl4_l      (opl4_l),
+		  .opl4_r      (opl4_r),
 		  .opll_o      (opll_o),
 		  .scc1_l      (scc1_l),
 		  .scc1_r      (scc1_r),
@@ -637,6 +885,9 @@ emsx_top #(
 		  .TrPcm_o     (TrPcm_o),
 		  .psg_o       (psg_o),
 		  .vol_o       (vol_o),
+		  .PsgVol_o    (psg_vol),
+		  .SccVol_o    (scc_vol),
+		  .OpllVol_o   (opll_vol),
 
 `ifdef SWAP_PORTS
 		  // swapped ports
@@ -650,7 +901,7 @@ emsx_top #(
         //proper port location
    `ifdef USE_EXTBUS			  
 		  .esp_rx_o    (BUS_TX),
-        .esp_tx_i    (BUS_RX)
+        .esp_tx_i    (BUS_RX),
    `endif
 		  .midi_o      (UART_TX),
 		  .midi_i      (UART_RX)
@@ -662,54 +913,55 @@ emsx_top #(
 ////////////////////   AUDIO   ///////////////////
 
 
-reg signed  [15:0] sum_audioL;
-reg signed  [15:0] sum_audioR;
 reg signed [15:0] opll_o;
-reg unsigned [15:0] opl3_l;
-reg unsigned [15:0] opl3_r;
+reg signed [15:0] opl3_l;
+reg signed [15:0] opl3_r;
+wire        [15:0] opl4_l, opl4_r;
 reg signed [14:0] scc1_r;
 reg signed [14:0] scc1_l;
-reg signed[14:0] scc2_r;
-reg signed[14:0] scc2_l;
+reg signed [14:0] scc2_r;
+reg signed [14:0] scc2_l;
 reg signed [7:0] TrPcm_o;
-reg unsigned [8:0] psg_o;
+reg [15:0] psg_o;
 
-wire signed [15:0] tape_sound;
-reg unsigned [15:0] scc_ul;
-reg unsigned [15:0] scc_ur;
-reg unsigned[15:0] opl_ul ;
-reg unsigned[15:0] opl_ur ;
+wire [2:0] vol_o, psg_vol, scc_vol, opll_vol;
 
-reg unsigned [15:0] opll_u ;
-reg unsigned [15:0] opl3_ul;
-reg unsigned [15:0] opl3_ur;
-
-assign opll_u =opll_o;
-assign opl3_ul=opl3_l;
-assign opl3_ur=opl3_r;
-
-assign scc_ul = scc1_l+scc2_l;
-assign scc_ur = scc1_r+scc2_r;
-
-
-assign opl_ul={opll_u} + {opl3_ul};
-assign opl_ur={opll_u} + {opl3_ur};
-assign tape_sound = status[9]? {8'b0,AUDIO_IN,7'b0} : 16'bZ ;
-
-assign sum_audioR = opl_ur + scc_ur + {1'b0,psg_o,6'b0} + {TrPcm_o,TrPcm_o} + tape_sound;
-assign sum_audioL = opl_ul + scc_ul + {1'b0,psg_o,6'b0} + {TrPcm_o,TrPcm_o} + tape_sound;
-
-wire [2:0] vol_o;
+`ifdef USE_AUDIO_IN
+wire tape_in = AUDIO_IN;
+`else
+wire tape_in = 1'b0;
+`endif
 
 wire signed [15:0] i2saudio_r,i2saudio_l;
+wire        [15:0] dacaudio_l,dacaudio_r;
 
-StereoVolumenControl StereoVolumenControl
+// mixer: sign extension, headroom and saturation, DC removal of the PSG / tape,
+// OCM volumes per source and master volume (misc/audio_mix.sv)
+audio_mix audio_mix
 (
- .volume_ctrl  (vol_o),
- .audio_left_in(sum_audioL),
- .audio_right_in(sum_audioR),
- .audio_left_out (i2saudio_l),
- .audio_right_out(i2saudio_r)
+ .clk      (clk_sys),
+ .reset    (reset),
+ .opl3_l   (opl3_l),
+ .opl3_r   (opl3_r),
+ .opl4_l   (opl4_l),
+ .opl4_r   (opl4_r),
+ .opll     (opll_o),
+ .scc1_l   (scc1_l),
+ .scc1_r   (scc1_r),
+ .scc2_l   (scc2_l),
+ .scc2_r   (scc2_r),
+ .psg      (psg_o),
+ .pcm      (TrPcm_o),
+ .tape_en  (status[9]),
+ .tape_in  (tape_in),
+ .psg_vol  (psg_vol),
+ .scc_vol  (scc_vol),
+ .opll_vol (opll_vol),
+ .mstr_vol (vol_o),
+ .out_l    (i2saudio_l),
+ .out_r    (i2saudio_r),
+ .dac_l    (dacaudio_l),
+ .dac_r    (dacaudio_r)
 );
 
 `ifdef I2S_AUDIO
@@ -749,8 +1001,6 @@ spdif spdif (
 );
 `endif
 
-wire unsigned [15:0] dacaudio_l=i2saudio_l;
-wire unsigned [15:0] dacaudio_r=i2saudio_r;
  
 dac #(
    .c_bits      (16))
@@ -773,6 +1023,45 @@ audiodac_r(
 
 //////////////////   VIDEO   //////////////////
 
+// Source: the V9958 of emsx_top or the V9990 (OSD, V9990 builds).  Auto: the
+// V9990 while its display is on (R#8 DISP), else the V9958.  Both give 15 kHz
+// lines of 1368 clk_sys; clk_v99 is clk_sys x2 from the same PLL and in phase,
+// so the V9990 outputs are just registered on clk_sys.  Sampled at clk_sys/2
+// (ce_divider 1): exact for P1, P2, B0, B1 and B3, B2 / B4 / B7 lose pixels.
+wire  [5:0] vid_r, vid_g, vid_b;
+wire        vid_hs, vid_vs, vid_blank;
+
+`ifdef V9990
+reg   [5:0] v99_r, v99_g, v99_b;
+reg         v99_hs, v99_vs, v99_blank, v99_on;
+
+always @(posedge clk_sys) begin
+	v99_r     <= v99_red[7:2];
+	v99_g     <= v99_grn[7:2];
+	v99_b     <= v99_blu[7:2];
+	v99_hs    <= v99_hsync_n;
+	v99_vs    <= v99_vsync_n;
+	v99_blank <= v99_hblank | v99_vblank;
+	v99_on    <= v99_disp;
+end
+
+wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
+
+assign vid_r     = vid_v99 ? v99_r     : R_O;
+assign vid_g     = vid_v99 ? v99_g     : G_O;
+assign vid_b     = vid_v99 ? v99_b     : B_O;
+assign vid_hs    = vid_v99 ? v99_hs    : HSync;
+assign vid_vs    = vid_v99 ? v99_vs    : VSync;
+assign vid_blank = vid_v99 ? v99_blank : blank;
+`else
+assign vid_r     = R_O;
+assign vid_g     = G_O;
+assign vid_b     = B_O;
+assign vid_hs    = HSync;
+assign vid_vs    = VSync;
+assign vid_blank = blank;
+`endif
+
 wire isVGA = status[2];
 
 mist_video #(
@@ -788,20 +1077,20 @@ mist_video
 	.SPI_SCK      (SPI_SCK    ),
 	.SPI_SS3      (SPI_SS3    ),
 	.SPI_DI       (SPI_DI     ),
-	.R            (R_O ),
-	.G            (G_O ),
-	.B            (B_O ),
-	.HSync        (HSync),
-	.VSync        (VSync),
+	.R            (vid_r ),
+	.G            (vid_g ),
+	.B            (vid_b ),
+	.HSync        (vid_hs),
+	.VSync        (vid_vs),
 	.VGA_R        (VGA_R      ),
 	.VGA_G        (VGA_G      ),
 	.VGA_B        (VGA_B      ),
 	.VGA_VS       (VGA_VS     ),
 	.VGA_HS       (VGA_HS     ),
-	.ce_divider   (1'b0       ),
-	.scandoubler_disable(1'b1),
+	.ce_divider   (3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
+	.scandoubler_disable(scandoubler_disable),   // F18A: 15kHz from the VDP, MiST doubles
 	.no_csync     (1'b1),
-	.scanlines    (2'b00),
+	.scanlines    (status[11:10]),
 	.ypbpr        (1'b0      )
 	);
 
@@ -826,11 +1115,12 @@ i2c_master #(22_000_000) i2c_master (
 
 mist_video #(
 	.COLOR_DEPTH(6),
+	.SD_HCNT_WIDTH(10),
 	.OUT_COLOR_DEPTH(8),
-	.USE_BLANKS(0),
+	.USE_BLANKS(1),                              // F18A: DE from the blank (HBlank)
 	.OSD_COLOR(3'b001),
 	.BIG_OSD(BIG_OSD),
-	.VIDEO_CLEANER(0)
+	.VIDEO_CLEANER(1)
 )
 
 hdmi_video (
@@ -840,36 +1130,28 @@ hdmi_video (
 	.SPI_SCK     ( SPI_SCK    ),
 	.SPI_SS3     ( SPI_SS3    ),
 	.SPI_DI      ( SPI_DI     ),
-	.scanlines   (status[9:7]),
-	.ce_divider  ( 3'd0       ),
-	.scandoubler_disable (1'b1),
+	.scanlines   (status[11:10]),
+	.ce_divider  ( 3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
+	.scandoubler_disable (1'b0),                 // F18A: HDMI always doubled
 	.no_csync    ( 1'b1       ),
 	.ypbpr       ( 1'b0       ),
 	.rotate      ( 2'b00      ),
 	.blend       ( 1'b0       ),
-	.R           (R_O),
-	.G           (G_O),
-	.B           (B_O),
-//	.HBlank      ( HBlank      ),
-//	.VBlank      ( VBlank      ),
-	.HSync       ( HSync       ),
-	.VSync       ( VSync       ),
+	.R           (vid_r),
+	.G           (vid_g),
+	.B           (vid_b),
+	.HBlank      ( vid_blank   ),                // F18A: H+V blank, held high on vblank lines
+	.VBlank      ( ~vid_vs     ),                // F18A: frame start for the OSD (vertical sync, active high)
+	.HSync       ( vid_hs      ),
+	.VSync       ( vid_vs      ),
 	.VGA_R       ( HDMI_R      ),
 	.VGA_G       ( HDMI_G      ),
 	.VGA_B       ( HDMI_B      ),
-	.VGA_VS      (             ),
-	.VGA_HS      (             ),
-	.VGA_DE      (             )
+	.VGA_VS      ( HDMI_VS     ),
+	.VGA_HS      ( HDMI_HS     ),
+	.VGA_DE      ( HDMI_DE     )
 );
 assign HDMI_PCLK = clk_hdmi;
 
-always @(posedge clk_hdmi) begin
-	//HDMI_R <= r;
-	//HDMI_G <= g;
-	//HDMI_B <= b;
-	HDMI_HS <= HSync;
-	HDMI_VS <= VSync;
-	HDMI_DE <= !blank;
-end
 `endif	
 endmodule

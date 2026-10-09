@@ -42,6 +42,7 @@ module pll (
 	c0,
 	c1,
 	c2,
+	c3,
 	locked);
 
 	input	  areset;
@@ -49,6 +50,7 @@ module pll (
 	output	  c0;
 	output	  c1;
 	output	  c2;
+	output	  c3;
 	output	  locked;
 `ifndef ALTERA_RESERVED_QIS
 // synopsys translate_off
@@ -61,12 +63,14 @@ module pll (
 	wire [4:0] sub_wire0;
 	wire  sub_wire4;
 	wire [0:0] sub_wire7 = 1'h0;
+	wire [3:3] sub_wire8 = sub_wire0[3:3];
 	wire [2:2] sub_wire3 = sub_wire0[2:2];
 	wire [1:1] sub_wire2 = sub_wire0[1:1];
 	wire [0:0] sub_wire1 = sub_wire0[0:0];
 	wire  c0 = sub_wire1;
 	wire  c1 = sub_wire2;
 	wire  c2 = sub_wire3;
+	wire  c3 = sub_wire8;
 	wire  locked = sub_wire4;
 	wire  sub_wire5 = inclk0;
 	wire [1:0] sub_wire6 = {sub_wire7, sub_wire5};
@@ -119,10 +123,14 @@ module pll (
 		altpll_component.clk1_duty_cycle = 50,
 		altpll_component.clk1_multiply_by = 55,
 		altpll_component.clk1_phase_shift = "0",
-		altpll_component.clk2_divide_by = 625,
+		altpll_component.clk2_divide_by = 64,
 		altpll_component.clk2_duty_cycle = 50,
-		altpll_component.clk2_multiply_by = 537,
-		altpll_component.clk2_phase_shift = "0",
+		altpll_component.clk2_multiply_by = 55,
+		altpll_component.clk2_phase_shift = "11636",
+		altpll_component.clk3_divide_by = 64,
+		altpll_component.clk3_duty_cycle = 50,
+		altpll_component.clk3_multiply_by = 55,
+		altpll_component.clk3_phase_shift = "0",
 		altpll_component.compensate_clock = "CLK0",
 		altpll_component.inclk0_input_frequency = 20000,
 		altpll_component.intended_device_family = "Cyclone IV GX",
@@ -158,7 +166,7 @@ module pll (
 		altpll_component.port_clk0 = "PORT_USED",
 		altpll_component.port_clk1 = "PORT_USED",
 		altpll_component.port_clk2 = "PORT_USED",
-		altpll_component.port_clk3 = "PORT_UNUSED",
+		altpll_component.port_clk3 = "PORT_USED",
 		altpll_component.port_clk4 = "PORT_UNUSED",
 		altpll_component.port_clk5 = "PORT_UNUSED",
 		altpll_component.port_clkena0 = "PORT_UNUSED",
