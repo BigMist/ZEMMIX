@@ -8,3 +8,6 @@
 [submodule "ocm-pld-dev"]
 	path = ocm-pld-dev
 	url = https://github.com/gnogni/ocm-pld-dev.git
+[submodule "v9990"]
+	path = v9990
+	url = https://github.com/rampa069/v9990.git
