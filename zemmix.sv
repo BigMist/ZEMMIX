@@ -210,19 +210,19 @@ localparam CONF_STR = {
 	"ZEMMIX;;",
 	"S0U,IMGVHD,Load virtual disk;",
 	"P1,Configuration Switches;",
-   "P1O1,CPU Clock,Standard,Turbo;",
-   "P1O2,Scandoubler,VGA,RGB;",
+    "P1O1,CPU Clock,Standard,Turbo;",
+    "P1O2,Scandoubler,VGA,RGB;",
 	"P1O3,VGA Output,CRT,LCD;",
 	"P1O4,Slot1,External (Optional S3),MegaSCC+ 2MB;",
-   "P1O56,Slot2,External,MegaRAM 1MB/1MB,MegaSCC+ 2MB,MegaRAM 2MB/2MB;",
+    "P1O56,Slot2,External,MegaRAM 1MB/1MB,MegaSCC+ 2MB,MegaRAM 2MB/2MB;",
 	"P1O7,RAM,2048kB,4096kB;",
 	"P1O8,internal MegaSD,Off,on;",
-   "O9,Tape sound,OFF,ON;",
-   "OAB,Scanlines,Off,25%,50%,75%;",
-   "OC,MoonSound (OPL3/OPL4),On,Off;",
+    "O9,Tape sound,OFF,ON;",
+    "OAB,Scanlines,Off,25%,50%,75%;",
+    "OC,MoonSound (OPL3/OPL4),On,Off;",
    `V99_OSD
-   "T0,Reset;",
-	"V,v1.0.",`BUILD_DATE
+    "T0,Reset;",
+	"V,v2.0.",`BUILD_DATE
 };
 
 ////////////////////   CLOCKS   ///////////////////
