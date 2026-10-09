@@ -174,21 +174,10 @@ localparam bit BIG_OSD = 0;
 
 `include "build_id.v"
 
-// 2nd SDRAM (SiDi128 only): the OPL4 wave memory and the V9990 VRAM.  Unused
-// until its controller is there (ZEMMIX-1os.2).
+// 2nd SDRAM (SiDi128 only): the OPL4 wave memory and the V9990 VRAM, the
+// controller is further down (sdram2, after the clocks)
 `ifdef DUAL_SDRAM
 localparam SDRAM2 = "true";
-assign SDRAM2_A = 13'hZZZZ;
-assign SDRAM2_BA = 0;
-assign SDRAM2_DQML = 0;
-assign SDRAM2_DQMH = 0;
-assign SDRAM2_CKE = 0;
-assign SDRAM2_CLK = 0;
-assign SDRAM2_nCS = 1;
-assign SDRAM2_DQ = 16'hZZZZ;
-assign SDRAM2_nCAS = 1;
-assign SDRAM2_nRAS = 1;
-assign SDRAM2_nWE = 1;
 `else
 localparam SDRAM2 = "false";
 `endif
@@ -281,6 +270,77 @@ sdramclk_ddr
 	.sclr(1'b0),
 	.sset(1'b0)
 );
+//////////////////   2nd SDRAM (SiDi128)   ///////////////////
+// The OPL4 wave memory (port 0) and the V9990 VRAM (port 1), misc/sdram2.sv:
+// same timing as the SDRAM of emsx_top (memclk, the clock inverted).  Reset
+// only by the PLL lock: the wave memory keeps ZEMMIX.ROM over the MSX resets.
+`ifdef DUAL_SDRAM
+altddio_out
+#(
+	.extend_oe_disable("OFF"),
+	.intended_device_family("Cyclone 10 LP"),
+	.invert_output("OFF"),
+	.lpm_hint("UNUSED"),
+	.lpm_type("altddio_out"),
+	.oe_reg("UNREGISTERED"),
+	.power_up_high("OFF"),
+	.width(1)
+)
+sdram2clk_ddr
+(
+	.datain_h(1'b0),
+	.datain_l(1'b1),
+	.outclock(memclk),
+	.dataout(SDRAM2_CLK),
+	.aclr(1'b0),
+	.aset(1'b0),
+	.oe(1'b1),
+	.outclocken(1'b1),
+	.sclr(1'b0),
+	.sset(1'b0)
+);
+
+wire        sdram2_ready;
+wire        sdram2_p0_ack, sdram2_p1_ack;
+wire [15:0] sdram2_p0_dout, sdram2_p1_dout;
+
+sdram2 sdram2
+(
+	.clk        ( memclk          ),
+	.reset      ( ~locked         ),
+	.ready      ( sdram2_ready    ),
+
+	// OPL4 wave memory (ZEMMIX-1os.3)
+	.p0_req     ( 1'b0            ),
+	.p0_ack     ( sdram2_p0_ack   ),
+	.p0_we      ( 1'b0            ),
+	.p0_be      ( 2'b11           ),
+	.p0_addr    ( 24'd0           ),
+	.p0_din     ( 16'd0           ),
+	.p0_dout    ( sdram2_p0_dout  ),
+
+	// V9990 VRAM (ZEMMIX-1os.4)
+	.p1_req     ( 1'b0            ),
+	.p1_ack     ( sdram2_p1_ack   ),
+	.p1_we      ( 1'b0            ),
+	.p1_be      ( 2'b11           ),
+	.p1_addr    ( 24'd0           ),
+	.p1_din     ( 16'd0           ),
+	.p1_dout    ( sdram2_p1_dout  ),
+
+	.SDRAM_A    ( SDRAM2_A        ),
+	.SDRAM_DQ   ( SDRAM2_DQ       ),
+	.SDRAM_DQML ( SDRAM2_DQML     ),
+	.SDRAM_DQMH ( SDRAM2_DQMH     ),
+	.SDRAM_nWE  ( SDRAM2_nWE      ),
+	.SDRAM_nCAS ( SDRAM2_nCAS     ),
+	.SDRAM_nRAS ( SDRAM2_nRAS     ),
+	.SDRAM_nCS  ( SDRAM2_nCS      ),
+	.SDRAM_BA   ( SDRAM2_BA       ),
+	.SDRAM_CKE  ( SDRAM2_CKE      )
+);
+`endif
+
 //////////////////   RP2040 pin reflection   ///////////////////
 
 `ifdef PIN_REFLECTION
