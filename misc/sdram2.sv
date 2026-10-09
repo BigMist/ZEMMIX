@@ -21,7 +21,7 @@
 // both ports waiting they take turns.
 //
 // reset: only at power on (the PLL lock): the wave memory keeps ZEMMIX.ROM
-// over the MSX resets.
+// over the MSX resets.  A request before ready waits for it.
 
 module sdram2 #(
 	parameter CLK_HZ   = 85909091,
@@ -32,7 +32,7 @@ module sdram2 #(
 	output reg        ready,
 
 	input             p0_req,
-	output reg        p0_ack,
+	output reg        p0_ack = 1'b0,
 	input             p0_we,
 	input      [1:0]  p0_be,
 	input     [23:0]  p0_addr,
@@ -40,7 +40,7 @@ module sdram2 #(
 	output reg [15:0] p0_dout,
 
 	input             p1_req,
-	output reg        p1_ack,
+	output reg        p1_ack = 1'b0,
 	input             p1_we,
 	input      [1:0]  p1_be,
 	input     [23:0]  p1_addr,
@@ -129,9 +129,7 @@ always @(posedge clk) begin
 		busy      <= 3'd0;
 		step      <= 2'd0;
 		inflight  <= 2'b00;
-		rd_pipe   <= 0;
-		p0_ack    <= p0_req;
-		p1_ack    <= p1_req;
+		rd_pipe   <= 0;                         // an access cut short is given again
 	end
 	else if (!ready) begin
 		// power on: 200 us, precharge all, 8 refresh, mode register
@@ -151,11 +149,8 @@ always @(posedge clk) begin
 				SDRAM_A  <= MODE;
 				SDRAM_BA <= 2'b00;
 				busy     <= 3'd2;
-			end else begin
-				ready  <= 1'b1;
-				p0_ack <= p0_req;                   // nothing asked before is done
-				p1_ack <= p1_req;
-			end
+			end else
+				ready <= 1'b1;                      // what was asked before is done now
 		end
 	end
 	else if (step == 2'd1) begin

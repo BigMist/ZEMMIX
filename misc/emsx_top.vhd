@@ -202,7 +202,27 @@ entity emsx_top is
         -- ZEMMIX.ROM (YRW801) from data_io index 0, to the OPL4 wave memory
         rom_dl_i       : in    std_logic := '0';
         rom_wr_i       : in    std_logic := '0';
-        rom_dat_i      : in    std_logic_vector(  7 downto 0 ) := (others => '0')
+        rom_dat_i      : in    std_logic_vector(  7 downto 0 ) := (others => '0');
+
+        -- OPL4 wave memory outside (opl4_wave_ext_g, 2nd SDRAM of the SiDi128): byte
+        -- address, wave_rdat the 16-bit word (adr(0) = 1: high byte); done when equal to req
+        wave_ext_req_t  : out   std_logic;
+        wave_ext_done_t : in    std_logic := '0';
+        wave_ext_we     : out   std_logic;
+        wave_ext_adr    : out   std_logic_vector( 21 downto 0 );
+        wave_ext_wdat   : out   std_logic_vector(  7 downto 0 );
+        wave_ext_rdat   : in    std_logic_vector( 15 downto 0 ) := (others => '1');
+
+        -- V9990 (use_v9990_g): ports 60h-6Fh to the host bus of v9990_core (misc/v9990_bus.vhd)
+        v99_clk         : in    std_logic := '0';                               -- 42.95 MHz, same PLL as clk21m
+        v99_reset_n     : out   std_logic;
+        v99_req         : out   std_logic;
+        v99_wrt         : out   std_logic;
+        v99_adr         : out   std_logic_vector(  3 downto 0 );
+        v99_dbo         : out   std_logic_vector(  7 downto 0 );
+        v99_ack         : in    std_logic := '0';
+        v99_dbi         : in    std_logic_vector(  7 downto 0 ) := (others => '1');
+        v99_int_n       : in    std_logic := '1'
     );
 end emsx_top;
 
@@ -1140,6 +1160,11 @@ architecture RTL of emsx_top is
     signal  opl4_do         : std_logic_vector(  7 downto 0 ) := (others => '1');
     signal  opl4_status     : std_logic_vector(  1 downto 0 ) := "00";
     signal  opl4_wait_n     : std_logic := '1';
+    -- V9990 (GFX9000)
+    signal  v99_cs          : std_logic;
+    signal  v99_dbi_s       : std_logic_vector(  7 downto 0 ) := (others => '1');
+    signal  v99_wait_n      : std_logic := '1';
+    signal  v99_int_s       : std_logic := '1';
     signal  RamDbi          : std_logic_vector(  7 downto 0 );
     signal  CpuAdr          : std_logic_vector( 24 downto 0 );
 
@@ -1814,7 +1839,8 @@ begin
     pSltWr_n    <=  r8_wr_n     when( r8_owner = '1' )else 'Z';
 
     pSltInt_n   <=  '0' when( pVdpInt_n = '0' ) or
-                            ( opl3_Int_n = '0' and opl3_enabled = '1' )else
+                            ( opl3_Int_n = '0' and opl3_enabled = '1' ) or
+                            ( v99_int_s = '0' )else
                     'Z';
 
     pSltSltsl_n <=  '1' when( Scc1Type /= "00" )else
@@ -1892,7 +1918,7 @@ begin
                 count := count - 1;
             end if;
 
-            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' )then
+            if( (CpuM1_n = '0' and iCpuM1_n = '1') or pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' or v99_wait_n = '0' )then
                 wait_n_s <= '0';
             elsif( count /= "0000" )then
                 wait_n_s <= '0';
@@ -1986,6 +2012,8 @@ begin
                 dlydbi <= tr_pcm_dbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "0111111" and opl3_enabled = '1' and use_opl4_g )then  -- OPL4 wave ports 7E-7Fh
                 dlydbi <= opl4_do;
+            elsif( mem = '0' and adr(  7 downto 4 ) = "0110" and use_v9990_g )then                          -- V9990 ports 60-6Fh
+                dlydbi <= v99_dbi_s;
             elsif( mem = '0' and adr(  7 downto 4 ) = "0100" and io40_n /= "11111111" )then                 -- Switched I/O ports
                 dlydbi <= swio_dbi;
             elsif( mem = '0' and adr(  7 downto 0 ) = "10100111" and portF4_mode = '1' )then                -- Pause R800 (read only)
@@ -2278,6 +2306,7 @@ begin
                 '0' when( rc_wram = '1' and not (sdr_wr_ok = '1' and sdr_wr_adr = CpuAdr and sdr_wr_dat = dbo) )else
                 '0' when( (rc_io = '1' or (rc_rd = '1' and (jSltMem = '0' or jSltScc1 = '1' or jSltScc2 = '1'))) and rc_cnt < "011" )else
                 '0' when( rc_io = '1' and opl4_wait_n = '0' )else                     -- OPL4: IN 7Fh until its data is there
+                '0' when( rc_io = '1' and v99_wait_n = '0' )else                      -- V9990: until it has taken / given the byte
                 '1';
 
     -- a device that ends its wait on edge W gives its data in dlydbi on edge W+1: the R800
@@ -2287,7 +2316,7 @@ begin
         if( reset = '1' )then
             r8_xwait_d <= '1';
         elsif( clk21m'event and clk21m = '1' )then
-            r8_xwait_d <= pSltWait_n and esp_wait_s and vdp_wait_n_s and opl4_wait_n;
+            r8_xwait_d <= pSltWait_n and esp_wait_s and vdp_wait_n_s and opl4_wait_n and v99_wait_n;
         end if;
     end process;
 
@@ -2295,7 +2324,7 @@ begin
                  '1' when( r8_hit = '1' )else                                             -- cache hit: no wait state
                  '0' when( (rc_rd = '1' or rc_wr = '1' or rc_io = '1') and rc_done = '0' )else
                  '0' when( r8_ext = '1' and r8_ext_cnt /= "111" )else                     -- external: as long as a Z80 access
-                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' or r8_xwait_d = '0' )else
+                 '0' when( pSltWait_n = '0' or esp_wait_s = '0' or vdp_wait_n_s = '0' or opl4_wait_n = '0' or v99_wait_n = '0' or r8_xwait_d = '0' )else
                  '1';
 
     -- R800 access to the cartridge slots (no internal device answers): the strobes last
@@ -2615,6 +2644,7 @@ begin
                 '1' when( pSltAdr(7 downto 0) = "11110100"                                      )else   -- I/O:F4h    / Port F4 device
                 '1' when( pSltAdr(7 downto 1) = "1010010"                                       )else   -- I/O:A4-A5h / turboR PCM device
                 '1' when( pSltAdr(7 downto 1) = "0111111" and opl3_enabled = '1' and use_opl4_g    )else   -- I/O:7E-7Fh / OPL4 wave
+                '1' when( pSltAdr(7 downto 4) = "0110" and use_v9990_g                          )else   -- I/O:60-6Fh / V9990
                 '1' when( pSltAdr(7 downto 1) = "0000011" and use_wifi_g                        )else   -- I/O:06-07h / ESP
                 '1' when( pSltAdr(7 downto 2) = "110001" and opl3_enabled = '1'                 )else   -- I/O:C4-C7h / OPL3 (MoonSound FM)
 --              '1' when( pSltAdr(7 downto 1) = "0111110" and opl3_enabled = '1'                )else   -- I/O:7C-7Dh / OPLL via OPL3
@@ -2875,10 +2905,20 @@ begin
     wave_go   <= wave_slot when( VideoDLClk = '0' or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
     wave_sdr_adr <= "111" & wave_adr;
 
+    wave_ext_req_t <= wave_req_t;
+    wave_ext_we    <= wave_we;
+    wave_ext_adr   <= wave_adr;
+    wave_ext_wdat  <= wave_wdat;
+
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
-            if( ff_sdr_seq = "111" )then
+            if( opl4_wave_ext_g )then
+                -- wave memory outside (2nd SDRAM): no slot of this SDRAM is taken
+                wave_slot   <= '0';
+                wave_done_t <= wave_ext_done_t;                             -- with its data, in the same memclk
+                wave_rdat   <= wave_ext_rdat;
+            elsif( ff_sdr_seq = "111" )then
                 -- V9968 dot states (DH/DL): 01, 10, 00, 11. A slot starts when DH rises: with
                 -- DL = 0 it is the cpu slot, with DL = 1 the vdp slot. At "111" the previous dot
                 -- state is still there, DL = 1 before a cpu slot (as the refresh above)
@@ -2894,7 +2934,7 @@ begin
                     wave_slot <= '0';
                 end if;
             end if;
-            if( ff_sdr_seq = "101" )then
+            if( not opl4_wave_ext_g and ff_sdr_seq = "101" )then
                 if( wave_slot = '1' and SdrSta(2 downto 1) = "10" )then
                     -- the access is done when its data is on the bus (read) or written,
                     -- only in a real cpu slot (else it is tried again)
@@ -3586,6 +3626,43 @@ begin
     end generate;
 
     romload_wr24 <= "00" & romload_wr;
+
+    -- V9990 (GFX9000, ZEMMIX-1os.5): ports 60h-6Fh to v9990_core (in zemmix.sv, next to
+    -- its VRAM in the 2nd SDRAM and the video), the cpu waits until it has the byte
+    v99_cs <= '1' when( iSltIorq_n = '0' and adr(7 downto 4) = "0110" )else '0';
+
+    v99_u : if use_v9990_g generate
+        u_v99bus : entity work.v9990_bus
+            port map(
+                clk21m      => clk21m,
+                reset       => reset,
+                cs          => v99_cs,
+                rd_n        => xSltRd_n,
+                wr_n        => xSltWr_n,
+                adr         => adr(3 downto 0),
+                dbo         => dbo,
+                dbi         => v99_dbi_s,
+                wait_n      => v99_wait_n,
+                int_n       => v99_int_s,
+                v_clk       => v99_clk,
+                v_reset_n   => v99_reset_n,
+                v_req       => v99_req,
+                v_wrt       => v99_wrt,
+                v_adr       => v99_adr,
+                v_dbo       => v99_dbo,
+                v_ack       => v99_ack,
+                v_dbi       => v99_dbi,
+                v_int_n     => v99_int_n
+            );
+    end generate;
+
+    v99_off : if not use_v9990_g generate
+        v99_reset_n <= '0';
+        v99_req     <= '0';
+        v99_wrt     <= '0';
+        v99_adr     <= (others => '0');
+        v99_dbo     <= (others => '0');
+    end generate;
 
     -- diagnostics of the ZEMMIX.ROM load (regs F0h-F3h, FAh-FFh of 7Eh/7Fh):
     -- RstSeq when the download starts (bits 7-3) and a wave slot seen during it (bit 0)

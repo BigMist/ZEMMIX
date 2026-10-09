@@ -5,13 +5,18 @@
 // (p0 on memclk / 4 as the OPL4, p1 on memclk / 2 as the V9990), checked
 // against a copy of the memory.
 //
-//   iverilog -g2012 -o sdram2_tb misc/sim/sdram2_tb.sv misc/sdram2.sv && vvp sdram2_tb
+// ADAPTER = 1: p1 through misc/v9990_vram_sdram.sv, its client as the V9990
+// core (req held until ack, the next req right after), latency in clk_p1.
+//
+//   iverilog -g2012 -o sdram2_tb misc/sim/sdram2_tb.sv misc/sdram2.sv misc/v9990_vram_sdram.sv && vvp sdram2_tb
+//   (-Psdram2_tb.ADAPTER=1)
 
 `timescale 1ps/1ps
 
 module sdram2_tb;
 
 localparam real T   = 11640.0;       // memclk 85.9 MHz
+parameter       ADAPTER = 0;
 parameter       DLY = 5000;          // FPGA out -> SDRAM -> FPGA in
 localparam      N   = 40000;         // accesses per port
 
@@ -25,12 +30,36 @@ wire clk_p1 = div[0];                // memclk / 2
 reg reset = 1;
 wire ready;
 
-reg         p0_req = 0, p0_we = 0, p1_req = 0, p1_we = 0;
+reg         p0_req = 0, p0_we = 0, p1_we = 0;
+wire        p1_req;
+reg         p1_req_r = 0;
 reg   [1:0] p0_be, p1_be;
 reg  [23:0] p0_addr, p1_addr;
 reg  [15:0] p0_din, p1_din;
-wire        p0_ack, p1_ack;
-wire [15:0] p0_dout, p1_dout;
+wire        p0_ack, p1_ack, p1_ack_s;
+wire  [1:0] s1_be;
+wire [23:0] s1_addr;
+wire [15:0] s1_din, p1_dout_s;
+wire        s1_we;
+
+// the V9990 core side of the adapter
+reg         c_req = 0;
+wire        c_ack;
+wire [15:0] c_rdata;
+
+generate if (ADAPTER) begin
+	v9990_vram_sdram adapter (
+		.clk(clk_p1), .req(c_req), .we(p1_we), .be(p1_be), .addr(p1_addr[17:0]), .wdata(p1_din),
+		.ack(c_ack), .rdata(c_rdata),
+		.s_req(p1_req), .s_ack(p1_ack_s), .s_we(s1_we), .s_be(s1_be), .s_addr(s1_addr),
+		.s_din(s1_din), .s_dout(p1_dout_s));
+end else begin
+	assign p1_req = p1_req_r;
+	assign s1_we = p1_we; assign s1_be = p1_be; assign s1_addr = p1_addr; assign s1_din = p1_din;
+end endgenerate
+assign p1_ack = p1_ack_s;
+wire [15:0] p0_dout;
+wire [15:0] p1_dout = ADAPTER ? c_rdata : p1_dout_s;
 
 wire [12:0] A;
 wire [15:0] DQ;
@@ -40,7 +69,7 @@ wire DQML, DQMH, nWE, nCAS, nRAS, nCS, CKE;
 sdram2 #(.CLK_HZ(85909091)) dut (
 	.clk(clk), .reset(reset), .ready(ready),
 	.p0_req(p0_req), .p0_ack(p0_ack), .p0_we(p0_we), .p0_be(p0_be), .p0_addr(p0_addr), .p0_din(p0_din), .p0_dout(p0_dout),
-	.p1_req(p1_req), .p1_ack(p1_ack), .p1_we(p1_we), .p1_be(p1_be), .p1_addr(p1_addr), .p1_din(p1_din), .p1_dout(p1_dout),
+	.p1_req(p1_req), .p1_ack(p1_ack_s), .p1_we(s1_we), .p1_be(s1_be), .p1_addr(s1_addr), .p1_din(s1_din), .p1_dout(p1_dout_s),
 	.SDRAM_A(A), .SDRAM_DQ(DQ), .SDRAM_DQML(DQML), .SDRAM_DQMH(DQMH), .SDRAM_nWE(nWE),
 	.SDRAM_nCAS(nCAS), .SDRAM_nRAS(nRAS), .SDRAM_nCS(nCS), .SDRAM_BA(BA), .SDRAM_CKE(CKE)
 );
@@ -137,7 +166,7 @@ function [23:0] raddr(input integer port);
 	begin
 		a = 24'd0;
 		a[23] = port[0];
-		a[22] = $urandom % 2;
+		a[22] = (ADAPTER && port[0]) ? 1'b0 : $urandom % 2;   // the adapter: bank 2
 		a[12:9]  = $urandom % 16;
 		a[8:0]   = $urandom % 512;
 		raddr = a;
@@ -149,7 +178,7 @@ endfunction
 
 integer done0 = 0, done1 = 0, rd0 = 0, rd1 = 0;
 integer lat_max0 = 0, lat_max1 = 0;
-time    t0;
+time    t0, t1_end;
 
 task automatic client0;
 	integer k;
@@ -189,13 +218,22 @@ task automatic client1;
 	begin
 		for (k = 0; k < N; k = k + 1) begin
 			@(posedge clk_p1);
+			#1;                     // as a flip-flop: after the edge
 			p1_addr = raddr(1);
 			p1_we   = ($urandom % 3) == 0 || ref_mem[ri(p1_addr)] === 16'hxxxx;
 			p1_be   = p1_we ? (1 + $urandom % 3) : 2'b11;
 			p1_din  = $urandom;
-			p1_req  = ~p1_req;
 			t = $time;
-			do @(posedge clk_p1); while (p1_ack != p1_req);
+			if (ADAPTER) begin
+				// as the core: req from this clock, ack sampled on the following ones
+				c_req = 1;
+				do @(posedge clk_p1); while (!c_ack);
+				#1;
+				c_req = 0;
+			end else begin
+				p1_req_r = ~p1_req_r;
+				do @(posedge clk_p1); while (p1_ack != p1_req);
+			end
 			if (($time - t) / T > lat_max1) lat_max1 = ($time - t) / T;
 			if (p1_we) begin
 				if (p1_be[0]) ref_mem[ri(p1_addr)][7:0]  = p1_din[7:0];
@@ -210,13 +248,22 @@ task automatic client1;
 			end
 		end
 		done1 = 1;
+		t1_end = $time;
 	end
 endtask
 
 initial begin
 	repeat (10) @(posedge clk);
 	reset = 0;
-	wait (ready);
+	// a write before ready waits for it (the ZEMMIX.ROM loader may start early)
+	@(posedge clk_p0);
+	p0_addr = 24'h000123; p0_we = 1; p0_be = 2'b11; p0_din = 16'hA55A;
+	p0_req = ~p0_req;
+	repeat (100) @(posedge clk_p0);
+	if (p0_ack == p0_req) begin errors++; $display("write acked before ready"); end
+	do @(posedge clk_p0); while (p0_ack != p0_req);
+	ref_mem[ri(p0_addr)] = p0_din;
+	if (!ready) begin errors++; $display("write done before ready"); end
 	$display("ready after %0d us", $time / 1000000);
 	t0 = $time;
 	fork client0; client1; join
@@ -224,6 +271,9 @@ initial begin
 	         N, N, rd0, rd1, ($time - t0) / T, 2.0 * N / (($time - t0) / 1e12) / 1e6);
 	$display("max latency p0 %0d, p1 %0d memclk; %0d refreshes, max gap %0d memclk (%.2f us)",
 	         lat_max0, lat_max1, refs, max_ref_gap, max_ref_gap * T / 1e6);
+	if (ADAPTER)
+		$display("adapter: p1 %.2f M accesses/s alone with p0 busy, %.1f clk_v99 per access",
+		         N / ((t1_end - t0) / 1e12) / 1e6, (t1_end - t0) / (2.0 * T) / N);
 	if (max_ref_gap * T > 7.8e6) begin errors++; $display("refresh gap over 7.8 us"); end
 	if (errors == 0) $display("PASS");
 	else $display("FAIL: %0d errors", errors);

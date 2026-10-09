@@ -226,6 +226,7 @@ localparam CONF_STR = {
 wire clk_sys;
 wire memclk;
 wire clk_hdmi;
+wire clk_v99;
 wire locked;
 
 pll pll
@@ -239,6 +240,9 @@ pll pll
 	.c1(memclk),
 `ifdef USE_HDMI
 		.c2(clk_hdmi),
+`endif
+`ifdef V9990
+	.c3(clk_v99),                                // 42.95 MHz, no phase shift: the V9990
 `endif
 
 	.locked(locked)
@@ -271,6 +275,13 @@ sdramclk_ddr
 	.sset(1'b0)
 );
 //////////////////   2nd SDRAM (SiDi128)   ///////////////////
+// OPL4 wave memory from emsx_top (opl4_wave_ext_g): byte address, 16-bit words
+wire        wave_req_t, wave_we;
+wire        wave_done_t;
+wire [21:0] wave_adr;
+wire  [7:0] wave_wdat;
+wire [15:0] wave_rdat;
+
 // The OPL4 wave memory (port 0) and the V9990 VRAM (port 1), misc/sdram2.sv:
 // same timing as the SDRAM of emsx_top (memclk, the clock inverted).  Reset
 // only by the PLL lock: the wave memory keeps ZEMMIX.ROM over the MSX resets.
@@ -301,8 +312,11 @@ sdram2clk_ddr
 );
 
 wire        sdram2_ready;
-wire        sdram2_p0_ack, sdram2_p1_ack;
-wire [15:0] sdram2_p0_dout, sdram2_p1_dout;
+// V9990 VRAM (misc/v9990_vram_sdram.sv, below)
+wire        v99_s_req, v99_s_ack, v99_s_we;
+wire  [1:0] v99_s_be;
+wire [23:0] v99_s_addr;
+wire [15:0] v99_s_din, v99_s_dout;
 
 sdram2 sdram2
 (
@@ -310,23 +324,23 @@ sdram2 sdram2
 	.reset      ( ~locked         ),
 	.ready      ( sdram2_ready    ),
 
-	// OPL4 wave memory (ZEMMIX-1os.3)
-	.p0_req     ( 1'b0            ),
-	.p0_ack     ( sdram2_p0_ack   ),
-	.p0_we      ( 1'b0            ),
-	.p0_be      ( 2'b11           ),
-	.p0_addr    ( 24'd0           ),
-	.p0_din     ( 16'd0           ),
-	.p0_dout    ( sdram2_p0_dout  ),
+	// OPL4 wave memory
+	.p0_req     ( wave_req_t      ),
+	.p0_ack     ( wave_done_t     ),
+	.p0_we      ( wave_we         ),
+	.p0_be      ( {wave_adr[0], ~wave_adr[0]} ),
+	.p0_addr    ( {3'b000, wave_adr[21:1]} ),         // bank 0, 4 MB
+	.p0_din     ( {wave_wdat, wave_wdat} ),
+	.p0_dout    ( wave_rdat       ),
 
-	// V9990 VRAM (ZEMMIX-1os.4)
-	.p1_req     ( 1'b0            ),
-	.p1_ack     ( sdram2_p1_ack   ),
-	.p1_we      ( 1'b0            ),
-	.p1_be      ( 2'b11           ),
-	.p1_addr    ( 24'd0           ),
-	.p1_din     ( 16'd0           ),
-	.p1_dout    ( sdram2_p1_dout  ),
+	// V9990 VRAM
+	.p1_req     ( v99_s_req       ),
+	.p1_ack     ( v99_s_ack       ),
+	.p1_we      ( v99_s_we        ),
+	.p1_be      ( v99_s_be        ),
+	.p1_addr    ( v99_s_addr      ),
+	.p1_din     ( v99_s_din       ),
+	.p1_dout    ( v99_s_dout      ),
 
 	.SDRAM_A    ( SDRAM2_A        ),
 	.SDRAM_DQ   ( SDRAM2_DQ       ),
@@ -339,6 +353,89 @@ sdram2 sdram2
 	.SDRAM_BA   ( SDRAM2_BA       ),
 	.SDRAM_CKE  ( SDRAM2_CKE      )
 );
+
+`ifndef V9990
+assign v99_s_req  = 1'b0;
+assign v99_s_we   = 1'b0;
+assign v99_s_be   = 2'b11;
+assign v99_s_addr = 24'd0;
+assign v99_s_din  = 16'd0;
+`endif
+`else
+assign wave_done_t = 1'b0;
+assign wave_rdat   = 16'hFFFF;
+`endif
+
+//////////////////   V9990 (GFX9000), SiDi128   ///////////////////
+// v9990/rtl/v9990_core on clk_v99 (42.95 MHz), ports 60h-6Fh from emsx_top
+// (misc/v9990_bus.vhd), its VRAM in bank 2 of the 2nd SDRAM (port 1 of sdram2,
+// misc/v9990_vram_sdram.sv).  Video: not used yet (ZEMMIX-1os.6).
+wire        v99_reset_n, v99_req, v99_wrt, v99_ack, v99_int_n;
+wire  [3:0] v99_adr;
+wire  [7:0] v99_dbo, v99_dbi;
+
+`ifdef V9990
+wire        v99_vram_req, v99_vram_we;
+wire  [1:0] v99_vram_be;
+wire [17:0] v99_vram_addr;
+wire [15:0] v99_vram_wdata, v99_vram_rdata;
+wire        v99_vram_ack;
+
+v9990_vram_sdram v9990_vram
+(
+	.clk    ( clk_v99        ),
+	.req    ( v99_vram_req   ),
+	.we     ( v99_vram_we    ),
+	.be     ( v99_vram_be    ),
+	.addr   ( v99_vram_addr  ),
+	.wdata  ( v99_vram_wdata ),
+	.ack    ( v99_vram_ack   ),
+	.rdata  ( v99_vram_rdata ),
+	.s_req  ( v99_s_req      ),
+	.s_ack  ( v99_s_ack      ),
+	.s_we   ( v99_s_we       ),
+	.s_be   ( v99_s_be       ),
+	.s_addr ( v99_s_addr     ),
+	.s_din  ( v99_s_din      ),
+	.s_dout ( v99_s_dout     )
+);
+
+v9990_core v9990
+(
+	.clk          ( clk_v99         ),
+	.reset_n      ( v99_reset_n     ),
+
+	.req_i        ( v99_req         ),
+	.wrt_i        ( v99_wrt         ),
+	.adr_i        ( v99_adr         ),
+	.dbo_i        ( v99_dbo         ),
+	.ack_o        ( v99_ack         ),
+	.dbi_o        ( v99_dbi         ),
+	.int_n_o      ( v99_int_n       ),
+
+	.vram_req_o   ( v99_vram_req    ),
+	.vram_we_o    ( v99_vram_we     ),
+	.vram_be_o    ( v99_vram_be     ),
+	.vram_addr_o  ( v99_vram_addr   ),
+	.vram_wdata_o ( v99_vram_wdata  ),
+	.vram_ack_i   ( v99_vram_ack    ),
+	.vram_rdata_i ( v99_vram_rdata  ),
+
+	.red_o        (                 ),
+	.grn_o        (                 ),
+	.blu_o        (                 ),
+	.hsync_n_o    (                 ),
+	.vsync_n_o    (                 ),
+	.hblank_o     (                 ),
+	.vblank_o     (                 ),
+	.interlace_o  (                 ),
+	.vid_x_o      (                 ),
+	.vid_y_o      (                 )
+);
+`else
+assign v99_ack   = 1'b0;
+assign v99_dbi   = 8'hFF;
+assign v99_int_n = 1'b1;
 `endif
 
 //////////////////   RP2040 pin reflection   ///////////////////
@@ -725,6 +822,21 @@ emsx_top #(
 		  .rom_dl_i    (rom_dl),                                              // ZEMMIX.ROM (YRW801) sent by the firmware
 		  .rom_wr_i    (ioctl_wr),
 		  .rom_dat_i   (ioctl_dout),
+		  .wave_ext_req_t  (wave_req_t),
+		  .wave_ext_done_t (wave_done_t),
+		  .wave_ext_we     (wave_we),
+		  .wave_ext_adr    (wave_adr),
+		  .wave_ext_wdat   (wave_wdat),
+		  .wave_ext_rdat   (wave_rdat),
+		  .v99_clk         (clk_v99),
+		  .v99_reset_n     (v99_reset_n),
+		  .v99_req         (v99_req),
+		  .v99_wrt         (v99_wrt),
+		  .v99_adr         (v99_adr),
+		  .v99_dbo         (v99_dbo),
+		  .v99_ack         (v99_ack),
+		  .v99_dbi         (v99_dbi),
+		  .v99_int_n       (v99_int_n),
 		  .opl3_l      (opl3_l),
 		  .opl3_r      (opl3_r),
 		  .opl4_l      (opl4_l),
