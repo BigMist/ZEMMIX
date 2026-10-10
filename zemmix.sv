@@ -218,7 +218,7 @@ localparam CONF_STR = {
 	"P1,Configuration Switches;",
     "P1O1,CPU Clock,Standard,Turbo;",
     "P1O2,Scandoubler,VGA,RGB;",
-	"P1O3,VGA Output,CRT,LCD;",
+	"P1OGH,Video Hz,Auto,60Hz (NTSC),50Hz (PAL);",
 	"P1O4,Slot1,External (Optional S3),MegaSCC+ 2MB;",
     "P1O56,Slot2,External,MegaRAM 1MB/1MB,MegaSCC+ 2MB,MegaRAM 2MB/2MB;",
 	"P1O7,RAM,2048kB,4096kB;",
@@ -710,7 +710,7 @@ always @(posedge clk_sys) begin
 	if (img_reset_cnt != 0) img_reset_cnt <= img_reset_cnt - 1'd1;
 	if (img_mounted | status[0]) img_reset_cnt <= 28'h2000000;
 	reset <= resetW;
-	dipsw <= {~status[8], ~status[7], ~status[6:5], ~status[4], ~status[3],1'b0 , ~status[1]};
+	dipsw <= {~status[8], ~status[7], ~status[6:5], ~status[4], 1'b1,1'b0 , ~status[1]};   // DIP 3 (VGA output CRT / LCD) not used: the VDP is always 15 kHz, mist_video doubles it
 end
 
 always_comb begin
@@ -887,6 +887,7 @@ emsx_top #(
 		  .vdp_field_o(vdp_field),     // VDP field (EO page) and R#9 IL: 31 kHz bob below
 		  .vdp_il_o   (vdp_il),
 		  .vdp_gamma_i(status[15]),    // OSD Palette: 0 = V9968 colours, 1 = openMSX
+		  .vdp_vmode_i(status[17:16]), // OSD Video Hz: 0 Auto (R#9 / SETSMART), 1 60 Hz, 2 50 Hz
 		  .rtc_set_i  (rtc_set),       // MiST clock into the MSX RTC
 		  .rtc_i      (mist_rtc),
 

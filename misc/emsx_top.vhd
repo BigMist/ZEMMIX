@@ -174,6 +174,8 @@ entity emsx_top is
         vdp_field_o     : out   std_logic;                                      -- VDP field (EO page) and R#9 IL, for the
         vdp_il_o        : out   std_logic;                                      -- 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
         vdp_gamma_i     : in    std_logic := '0';                               -- OSD: VDP colour curve, 1 = openMSX (f7c.7)
+        vdp_vmode_i     : in    std_logic_vector(  1 downto 0 ) := "00";        -- OSD Video Hz: 00 auto (R#9 / smart codes),
+                                                                                --   01 forced 60 Hz, 1x forced 50 Hz
         rtc_set_i       : in    std_logic := '0';                               -- MiST clock into the MSX RTC (ZEMMIX-0jv):
         rtc_i           : in    std_logic_vector( 63 downto 0 ) := (others => '0'); -- user_io rtc, loaded on a rtc_set_i pulse
         ear_i           : in    std_logic;
@@ -1063,6 +1065,8 @@ architecture RTL of emsx_top is
     signal  pVdpInt_n       : std_logic;
     signal  ntsc_pal_type   : std_logic;
     signal  forced_v_mode   : std_logic;
+    signal  vdp_ntsc_pal_s  : std_logic;                                        -- with the OSD Video Hz
+    signal  vdp_forced_v_s  : std_logic;
     signal  legacy_vga      : std_logic;
     signal  VDP_ID          : std_logic_vector(  4 downto 0 );
     signal  OFFSET_Y        : std_logic_vector(  6 downto 0 );
@@ -3412,6 +3416,11 @@ begin
     kan_cyc <= '1' when( iSltIorq_n = '0' and adr(7 downto 2) = "110110" )else '0';
     kan_rd  <= '1' when( rc_io = '1' and mem = '0' and adr(7 downto 2) = "110110" and adr(0) = '1' and wrt = '0' )else '0';
 
+    -- OSD Video Hz: Auto keeps R#9 NT and the smart codes (SETSMART -D0/-D1/-D2),
+    -- 60 Hz / 50 Hz force the VDP mode
+    vdp_ntsc_pal_s <= ntsc_pal_type when( vdp_vmode_i = "00" )else '0';
+    vdp_forced_v_s <= forced_v_mode when( vdp_vmode_i = "00" )else vdp_vmode_i(1);
+
     U20 : vdp
         -- V9938 VDP core
 --      port map(clk21m, reset, VdpReq, open, wrt, adr, VdpDbi, dbo, pVdpInt_n,
@@ -3422,7 +3431,7 @@ begin
         port map(clk21m, reset, VdpReq, open, wrt, adr, VdpDbi, dbo, pVdpInt_n,
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
-                        VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
+                        VideoDHClk, VideoDLClk, BLANK_o, '0', vdp_ntsc_pal_s, vdp_forced_v_s, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
                         vdp_wait_n_s, vdp_busy, vdp_field_o, vdp_il_o, vdp_gamma_i);
 
     U21 : vencode
