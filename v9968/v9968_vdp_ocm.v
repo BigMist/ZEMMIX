@@ -38,6 +38,9 @@ module vdp #(
 	output				int_n,
 	output				wait_n,
 	output				busy,			//	a request (read or write) is still running in the V9968
+	output				field_o,		//	ZEMMIX: field (EO page, 1 = odd), on clk21m
+	output				interlace_o,	//	ZEMMIX: R#9 IL, on clk21m (31 kHz bob in zemmix.sv)
+	input				gamma_i,		//	ZEMMIX: 1 = openMSX colour curve (OSD), static
 
 	output				pramoe_n,
 	output				pramwe_n,
@@ -49,9 +52,9 @@ module vdp #(
 	input		[2:0]	ratiomode,
 	input				centeryjk_r25_n,
 
-	output		[5:0]	pvideor,
-	output		[5:0]	pvideog,
-	output		[5:0]	pvideob,
+	output		[7:0]	pvideor,			//	8 bits per channel (the OCM VDP has 6)
+	output		[7:0]	pvideog,
+	output		[7:0]	pvideob,
 	output				pvideohs_n,
 	output				pvideovs_n,
 	output				pvideocs_n,
@@ -72,9 +75,10 @@ module vdp #(
 	localparam			c_h_visible			= 11'd576;		//	as the V9968 video_out (576 half pixels)
 	localparam			c_hs_start			= 11'd590;
 	localparam			c_hs_end			= 11'd636;		//	46 half pixels = 4.28us
-	localparam			c_v_visible			= 9'd240;
+	localparam			c_v_visible			= 9'd240;		//	60 Hz: 212 lines and their borders
+	localparam			c_v_visible_50		= 9'd294;		//	50 Hz: 212 + 41 + 41 border lines (as openMSX, ZEMMIX-f7c.4)
 	localparam			c_v_start_60		= 9'd7;			//	V9968 video_out: v_count 14
-	localparam			c_v_start_50		= 9'd34;		//	18 lines over the 212 lines image, as at 60Hz
+	localparam			c_v_start_50		= 9'd11;		//	41 lines over the 212 lines image (was 34: 18 lines, cut at 240)
 	localparam			c_vs_start_60		= 9'd255;		//	V9968 video_out: v_count 510-516
 	localparam			c_vs_start_50		= 9'd306;		//	V9968 video_out: v_count 612-618
 	localparam			c_vs_lines			= 9'd3;
@@ -290,6 +294,14 @@ module vdp #(
 	wire				w_field;
 	wire				w_interlace_mode;
 
+	//	OSD colour curve, into the core clock
+	reg			[1:0]	ff_gamma_s = 2'd0;
+	reg			[3:0]	ff_vmode_s = 4'b1000;			//	{ auto, auto, 50 Hz, 50 Hz }: NTSC / PAL setting
+	always @( posedge clk ) begin
+		ff_gamma_s	<= { ff_gamma_s[0], gamma_i };
+		ff_vmode_s	<= { ff_vmode_s[2], ntsc_pal_type, ff_vmode_s[0], forced_v_mode };
+	end
+
 	v9968_core u_v9968 (
 		.reset_n				( reset_n				),
 		.clk					( clk					),
@@ -322,6 +334,9 @@ module vdp #(
 		.pixel_field			( w_field				),
 		.pixel_interlace_mode	( w_interlace_mode		),
 		.force_highspeed		( vdpspeedmode			),
+		.gamma_openmsx			( ff_gamma_s[1]			),
+		.video_auto				( ff_vmode_s[3]			),		//	ntsc_pal_type: 1 = R#9 NT
+		.video_50hz				( ff_vmode_s[1]			),		//	forced_v_mode: 1 = 50 Hz
 		.ext_cmd_wr				( 1'b0					),		//	geo3d not connected
 		.ext_cmd_num			( 6'd0					),
 		.ext_cmd_data			( 8'd0					),
@@ -386,7 +401,7 @@ module vdp #(
 	reg					ff_hs = 1'b0;
 	reg					ff_vs = 1'b0;
 	reg					ff_blank = 1'b1;
-	reg			[17:0]	ff_rgb = 18'd0;
+	reg			[23:0]	ff_rgb = 24'd0;
 
 	assign w_tick		= (w_h_count[2:0] == 3'd7);
 	assign w_column_raw	= w_screen_pos_x[13:3] + 11'd32 - { 6'd0, ~w_display_adjust[3], w_display_adjust[2:0], 1'b0 };
@@ -395,7 +410,7 @@ module vdp #(
 	assign w_v_start	= w_50hz_mode ? c_v_start_50  : c_v_start_60;
 	assign w_vs_start	= w_50hz_mode ? c_vs_start_50 : c_vs_start_60;
 	assign w_h_visible	= (w_column < c_h_visible);
-	assign w_v_visible	= (w_line >= w_v_start) && (w_line < w_v_start + c_v_visible);
+	assign w_v_visible	= (w_line >= w_v_start) && (w_line < w_v_start + (w_50hz_mode ? c_v_visible_50 : c_v_visible));
 
 	always @( posedge clk ) begin
 		if( w_tick ) begin
@@ -410,16 +425,16 @@ module vdp #(
 
 			ff_blank	<= ~(w_h_visible & w_v_visible);
 			if( w_h_visible & w_v_visible ) begin
-				ff_rgb	<= { w_pixel_r[7:2], w_pixel_g[7:2], w_pixel_b[7:2] };
+				ff_rgb	<= { w_pixel_r, w_pixel_g, w_pixel_b };
 			end
 			else begin
-				ff_rgb	<= 18'd0;
+				ff_rgb	<= 24'd0;
 			end
 		end
 	end
 
 	//	Into the CLK21M domain (CLK21M x 4 from the PLL, related clocks).
-	reg			[17:0]	ff_video_rgb = 18'd0;
+	reg			[23:0]	ff_video_rgb = 24'd0;
 	reg					ff_video_hs_n = 1'b1;
 	reg					ff_video_vs_n = 1'b1;
 	reg					ff_video_cs_n = 1'b1;
@@ -433,11 +448,25 @@ module vdp #(
 		ff_video_blank	<= ff_blank;
 	end
 
-	assign pvideor		= ff_video_rgb[17:12];
-	assign pvideog		= ff_video_rgb[11: 6];
-	assign pvideob		= ff_video_rgb[ 5: 0];
+	assign pvideor		= ff_video_rgb[23:16];
+	assign pvideog		= ff_video_rgb[15: 8];
+	assign pvideob		= ff_video_rgb[ 7: 0];
 	assign pvideohs_n	= ff_video_hs_n;
 	assign pvideovs_n	= ff_video_vs_n;
 	assign pvideocs_n	= ff_video_cs_n;
 	assign blank_o		= ff_video_blank;
+	// --------------------------------------------------------------------
+	//	Field and interlace for the 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
+	// --------------------------------------------------------------------
+	reg			[1:0]	ff_field_s = 2'd0;
+	reg			[1:0]	ff_il_s = 2'd0;
+
+	always @( posedge clk21m ) begin
+		ff_field_s	<= { ff_field_s[0], w_field };
+		ff_il_s		<= { ff_il_s[0], w_interlace_mode };
+	end
+
+	assign field_o		= ff_field_s[1];
+	assign interlace_o	= ff_il_s[1];
+
 endmodule

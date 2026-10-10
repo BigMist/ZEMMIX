@@ -248,6 +248,8 @@ module vdp_cpu_interface (
 	reg					ff_vram_address_inc;		//	アドレスインクリメント要求
 	reg					ff_vram_valid;
 	reg					ff_busy;
+	reg			[7:0]	ff_read_latch;				//	V9938 read-ahead / write data latch (port 98h)
+	reg					ff_prefetch_req;			//	read the next byte into ff_read_latch
 
 	reg					ff_line_interrupt = 1'b0;
 	reg					ff_frame_interrupt = 1'b0;
@@ -297,7 +299,9 @@ module vdp_cpu_interface (
 			ff_bus_valid	<= 1'b0;
 			ff_bus_ready	<= 1'b1;
 		end
-		else if( bus_valid && ff_bus_ready ) begin
+		else if( bus_valid && ff_bus_ready && !ff_busy ) begin
+			//	ZEMMIX: taken only when bus_ready is seen (not busy), so a request
+			//	is never latched during a read-ahead and then lost
 			ff_bus_ioreq	<= bus_ioreq;
 			ff_bus_write	<= bus_write;
 			ff_bus_wdata	<= bus_wdata;
@@ -400,10 +404,14 @@ module vdp_cpu_interface (
 	end
 
 	// ------------------------------------------------------------------------
-	//	write
-	//		ff_address_inc=1 --> ff_vram_valid=1 --> ff_busy=0
-	//	read
-	//		ff_vram_valid=1 --> vram_rdata_en=1 --> ff_address_inc=1 --> ff_busy=0
+	//	VRAM access of the CPU ports (ZEMMIX: V9938 read-ahead, as openMSX)
+	//	The address points to the next byte; every access increments it after
+	//	itself.
+	//	write (98h):    ff_vram_valid=1 --> vram_ready --> ff_address_inc=1 --> ff_busy=0
+	//	prefetch:       ff_vram_valid=1 --> vram_rdata_en --> ff_address_inc=1 --> ff_busy=0
+	//	A 98h read gives ff_read_latch at once and prefetches the next byte; a
+	//	read address setup prefetches the first one; a 98h write also loads the
+	//	latch (openMSX VDP::scheduleCpuVramAccess, tested on a real V9938).
 	always @( posedge clk ) begin
 		if( !reset_n ) begin
 			ff_vram_valid		<= 1'b0;
@@ -411,6 +419,7 @@ module vdp_cpu_interface (
 			ff_vram_wdata		<= 8'd0;
 			ff_vram_address_inc	<= 1'b0;
 			ff_busy				<= 1'b0;
+			ff_prefetch_req		<= 1'b0;
 		end
 		else if( vram_rdata_en ) begin
 			ff_vram_address_inc	<= 1'b1;
@@ -419,36 +428,37 @@ module vdp_cpu_interface (
 			if( vram_ready ) begin
 				ff_vram_valid		<= 1'b0;
 				if( ff_vram_write ) begin
-					ff_busy			<= 1'b0;
+					ff_vram_address_inc	<= 1'b1;
 				end
 			end
 		end
 		else if( ff_vram_address_inc ) begin
 			ff_vram_address_inc	<= 1'b0;
-			if( ff_vram_write && !vram_access_mask ) begin
-				//	Write Access
-				ff_vram_valid	<= 1'b1;
-			end
-			else begin
-				//	Read access or vram_access_mask
-				ff_busy			<= 1'b0;
-			end
+			ff_busy				<= 1'b0;
 		end
 		else if( w_write && ff_port0 ) begin
 			//	VRAM write access
-			ff_vram_valid		<= 1'b0;
 			ff_vram_write		<= 1'b1;
 			ff_vram_wdata		<= ff_bus_wdata;
-			ff_vram_address_inc <= 1'b1;
 			ff_busy				<= 1'b1;
+			if( vram_access_mask ) begin
+				ff_vram_address_inc	<= 1'b1;
+			end
+			else begin
+				ff_vram_valid		<= 1'b1;
+			end
 		end
-		else if( w_read && ff_port0 ) begin
-			//	VRAM read access
+		else if( (w_read && ff_port0) || ff_prefetch_req ) begin
+			//	prefetch of the next byte (after a 98h read or a read address setup)
+			ff_prefetch_req		<= 1'b0;
 			ff_vram_valid		<= 1'b1;
 			ff_vram_write		<= 1'b0;
 			ff_vram_wdata		<= 8'd0;
-			ff_vram_address_inc <= 1'b0;
 			ff_busy				<= 1'b1;
+		end
+		else if( w_write && ff_port1 && ff_2nd_access && ff_bus_wdata[7:6] == 2'd0 ) begin
+			//	read address setup: prefetch from the next clock (address set now)
+			ff_prefetch_req		<= 1'b1;
 		end
 	end
 
@@ -499,7 +509,7 @@ module vdp_cpu_interface (
 					begin
 						ff_vram_address[7:0]	<= ff_1st_byte;
 						ff_vram_address[13:8]	<= ff_bus_wdata[5:0];
-						ff_vram_address_noinc	<= 1'b1;
+						ff_vram_address_noinc	<= 1'b0;		//	ZEMMIX: post increment (read-ahead)
 					end
 				default:
 					begin
@@ -823,18 +833,20 @@ module vdp_cpu_interface (
 			ff_bus_rdata_en		<= 1'b0;
 		end
 		else if( vram_rdata_en ) begin
+			//	prefetched byte into the latch (ZEMMIX read-ahead)
 			if( vram_access_mask ) begin
-				ff_bus_rdata		<= 8'b11111111;
+				ff_read_latch		<= 8'b11111111;
 			end
 			else begin
-				ff_bus_rdata		<= vram_rdata;
+				ff_read_latch		<= vram_rdata;
 			end
-			ff_bus_rdata_en		<= 1'b1;
+			ff_bus_rdata_en		<= 1'b0;
 		end
 		else if( w_read ) begin
 			if( ff_port0 ) begin
-				ff_bus_rdata	<= 8'b11111111;
-				ff_bus_rdata_en	<= 1'b0;
+				//	the byte read ahead, at once
+				ff_bus_rdata	<= ff_read_latch;
+				ff_bus_rdata_en	<= 1'b1;
 			end
 			else if( ff_port1 ) begin
 				ff_bus_rdata	<= ff_status_register;
@@ -852,6 +864,9 @@ module vdp_cpu_interface (
 		else begin
 			ff_bus_rdata	<= 8'd0;
 			ff_bus_rdata_en	<= 1'b0;
+		end
+		if( w_write && ff_port0 ) begin
+			ff_read_latch	<= ff_bus_wdata;		//	a 98h write loads the read latch (V9938)
 		end
 	end
 

@@ -84,7 +84,8 @@ module vdp_color_palette (
 	input				reg_color0_opaque,
 	input		[7:0]	reg_backdrop_color,
 	input				reg_ext_palette_mode,
-	input				reg_sprite_mode3
+	input				reg_sprite_mode3,
+	input				gamma_openmsx			//	ZEMMIX: 1 = the openMSX V9958 curve (gamma 1.1)
 );
 	localparam			c_mode_g1	= 5'b000_00;	//	Graphic1 (SCREEN1)
 	localparam			c_mode_g2	= 5'b001_00;	//	Graphic2 (SCREEN2)
@@ -595,6 +596,48 @@ module vdp_color_palette (
 		ff_rgb_load	<= (screen_pos_x[3:0] == 4'd3) || (w_high_resolution && screen_pos_x[3:0] == 4'd11);
 	end
 
+	//	ZEMMIX (ZEMMIX-f7c.7): the openMSX V9958 curve, 255 * (c / 31) ^ (1 / 1.1)
+	//	(SDLRasterizer, default gamma 1.1), the same for R, G and B
+	function [7:0] gamma_om(
+		input	[4:0]	linear
+	);
+		case( linear )
+		5'd0:		gamma_om = 8'd0;
+		5'd1:		gamma_om = 8'd11;
+		5'd2:		gamma_om = 8'd21;
+		5'd3:		gamma_om = 8'd31;
+		5'd4:		gamma_om = 8'd40;
+		5'd5:		gamma_om = 8'd49;
+		5'd6:		gamma_om = 8'd57;
+		5'd7:		gamma_om = 8'd66;
+		5'd8:		gamma_om = 8'd74;
+		5'd9:		gamma_om = 8'd83;
+		5'd10:		gamma_om = 8'd91;
+		5'd11:		gamma_om = 8'd99;
+		5'd12:		gamma_om = 8'd108;
+		5'd13:		gamma_om = 8'd116;
+		5'd14:		gamma_om = 8'd124;
+		5'd15:		gamma_om = 8'd132;
+		5'd16:		gamma_om = 8'd140;
+		5'd17:		gamma_om = 8'd148;
+		5'd18:		gamma_om = 8'd156;
+		5'd19:		gamma_om = 8'd163;
+		5'd20:		gamma_om = 8'd171;
+		5'd21:		gamma_om = 8'd179;
+		5'd22:		gamma_om = 8'd187;
+		5'd23:		gamma_om = 8'd194;
+		5'd24:		gamma_om = 8'd202;
+		5'd25:		gamma_om = 8'd210;
+		5'd26:		gamma_om = 8'd217;
+		5'd27:		gamma_om = 8'd225;
+		5'd28:		gamma_om = 8'd232;
+		5'd29:		gamma_om = 8'd240;
+		5'd30:		gamma_om = 8'd248;
+		5'd31:		gamma_om = 8'd255;
+		default:	gamma_om = 8'd0;
+		endcase
+	endfunction
+
 	function [7:0] gamma_r(
 		input	[4:0]	linear
 	);
@@ -722,9 +765,9 @@ module vdp_color_palette (
 			ff_vdp_b <= 8'd0;
 		end
 		else if( ff_rgb_load ) begin
-			ff_vdp_r <= gamma_r( w_display_r );
-			ff_vdp_g <= gamma_g( w_display_g );
-			ff_vdp_b <= gamma_b( w_display_b );
+			ff_vdp_r <= gamma_openmsx ? gamma_om( w_display_r ): gamma_r( w_display_r );
+			ff_vdp_g <= gamma_openmsx ? gamma_om( w_display_g ): gamma_g( w_display_g );
+			ff_vdp_b <= gamma_openmsx ? gamma_om( w_display_b ): gamma_b( w_display_b );
 		end
 	end
 

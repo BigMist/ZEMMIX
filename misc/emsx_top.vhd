@@ -137,9 +137,9 @@ entity emsx_top is
         pLedPwr         : out   std_logic;                                      -- 0=Off, 1=On (red)
 
         -- Video, Audio ports
-        pDac_VR         : inout std_logic_vector(  5 downto 0 );                -- RGB_Red / Svideo_C
-        pDac_VG         : inout std_logic_vector(  5 downto 0 );                -- RGB_Grn / Svideo_Y
-        pDac_VB         : inout std_logic_vector(  5 downto 0 );                -- RGB_Blu / Composite Video
+        pDac_VR         : inout std_logic_vector(  7 downto 0 );                -- RGB_Red / Svideo_C (8 bits: ZEMMIX VDPs)
+        pDac_VG         : inout std_logic_vector(  7 downto 0 );                -- RGB_Grn / Svideo_Y
+        pDac_VB         : inout std_logic_vector(  7 downto 0 );                -- RGB_Blu / Composite Video
         --pDac_SL         : out   std_logic_vector(  5 downto 0 ) := "ZZZZZZ";    -- Sound-L
         --pDac_SR         : out   std_logic_vector(  5 downto 0 ) := "ZZZZZZ";    -- Sound-R
 
@@ -171,6 +171,9 @@ entity emsx_top is
         esp_rx_o        : out   std_logic := 'Z';
         esp_tx_i        : in    std_logic := 'Z';
         blank_o         : out   std_logic;
+        vdp_field_o     : out   std_logic;                                      -- VDP field (EO page) and R#9 IL, for the
+        vdp_il_o        : out   std_logic;                                      -- 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
+        vdp_gamma_i     : in    std_logic := '0';                               -- OSD: VDP colour curve, 1 = openMSX (f7c.7)
         ear_i           : in    std_logic;
         mic_o           : out   std_logic;
         midi_o          : out   std_logic;
@@ -465,9 +468,9 @@ architecture RTL of emsx_top is
             centerYJK_R25_n : in    std_logic;                          -- for TH9958 VDP core
 
             -- Video Output
-            pVideoR         : out   std_logic_vector(  5 downto 0 );
-            pVideoG         : out   std_logic_vector(  5 downto 0 );
-            pVideoB         : out   std_logic_vector(  5 downto 0 );
+            pVideoR         : out   std_logic_vector(  7 downto 0 );    -- 8 bits (V9968 / F18A wrappers)
+            pVideoG         : out   std_logic_vector(  7 downto 0 );
+            pVideoB         : out   std_logic_vector(  7 downto 0 );
 
             pVideoHS_n      : out   std_logic;
             pVideoVS_n      : out   std_logic;
@@ -493,7 +496,11 @@ architecture RTL of emsx_top is
 
             wait_n          : out   std_logic;                           -- V9968: VRAM read in progress
 
-            busy            : out   std_logic                           -- V9968: a request is still running
+            busy            : out   std_logic;                          -- V9968: a request is still running
+
+            field_o         : out   std_logic;                          -- V9968: field (EO page)
+            interlace_o     : out   std_logic;                          -- V9968: R#9 IL
+            gamma_i         : in    std_logic                           -- V9968: 1 = openMSX colour curve
         );
     end component;
 
@@ -728,6 +735,10 @@ architecture RTL of emsx_top is
         if( b )then return 1; else return 0; end if;
     end function;
     constant line_rd_c : integer := line_rd_f( opl4_wave_ext_g );
+    -- The VDP (V9968) keeps its VRAM in block RAM: its SDRAM slots (DL = 1) are free
+    -- and go to the OPL4 wave memory when it has an access pending (ZEMMIX-f7c.9).
+    -- false for a VDP with its VRAM in the SDRAM (the ESE / OCM vdp.vhd).
+    constant vdp_sdram_free_c : boolean := true;
 
     component opl4_wave is
         generic(
@@ -1053,9 +1064,9 @@ architecture RTL of emsx_top is
     signal  OFFSET_Y        : std_logic_vector(  6 downto 0 );
 
     -- Video signals
-    signal  VideoR          : std_logic_vector( 5 downto 0 );                       -- RGB Red
-    signal  VideoG          : std_logic_vector( 5 downto 0 );                       -- RGB Green
-    signal  VideoB          : std_logic_vector( 5 downto 0 );                       -- RGB Blue
+    signal  VideoR          : std_logic_vector( 7 downto 0 );                       -- RGB Red (8 bits)
+    signal  VideoG          : std_logic_vector( 7 downto 0 );                       -- RGB Green
+    signal  VideoB          : std_logic_vector( 7 downto 0 );                       -- RGB Blue
     signal  VideoHS_n       : std_logic;                                            -- Horizontal Sync
     signal  VideoVS_n       : std_logic;                                            -- Vertical Sync
     signal  VideoCS_n       : std_logic;                                            -- Composite Sync
@@ -2653,9 +2664,9 @@ begin
             -- the VGA branch (RGB, HS, VS) whatever DisplayMode is.
             case std_logic_vector'("10") is
             when "00" =>                                            -- TV 15kHz
-                pDac_VR     <= videoC;                              -- Chrominance of S-Video Out
-                pDac_VG     <= videoY;                              -- Luminance of S-Video Out
-                pDac_VB     <= videoV;                              -- Composite Video Out
+                pDac_VR     <= videoC & "00";                       -- Chrominance of S-Video Out
+                pDac_VG     <= videoY & "00";                       -- Luminance of S-Video Out
+                pDac_VB     <= videoV & "00";                       -- Composite Video Out
                 Reso_v      <= '0';                                 -- Hsync:15kHz
                 pVideoHS_n  <= 'Z';                                 -- CSync Disabled
                 pVideoVS_n  <= DACout;                              -- Audio Out (Mono)
@@ -2872,6 +2883,8 @@ begin
                 SdrSta(1) <= VideoDLClk;                                            -- 0:cpu, 1:vdp
                 if( VideoDLClk = '0' and wave_slot = '1' )then
                     SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a free cpu slot)
+                elsif( wave_slot = '1' and vdp_sdram_free_c )then
+                    SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a vdp slot)
                 elsif( VideoDLClk = '0' )then
                     SdrSta(0) <= w_wrt_req;         -- for cpu
                 else
@@ -2896,7 +2909,7 @@ begin
     sdr_hold  <= reset or rom_dl_i;
     -- during RstSeq (after the mode set) every slot writes the same few addresses again
     -- and again: the ZEMMIX.ROM loader can take any of them for its writes
-    wave_go   <= wave_slot when( VideoDLClk = '0' or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
+    wave_go   <= wave_slot when( VideoDLClk = '0' or vdp_sdram_free_c or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
     wave_sdr_adr <= "111" & wave_adr;
 
     wave_ext_req_t <= wave_req_t;
@@ -2920,6 +2933,8 @@ begin
                     ( RamReq = '0' or
                       (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
                     wave_slot <= '1';
+                elsif( vdp_sdram_free_c and wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '0' )then
+                    wave_slot <= '1';                                       -- a vdp slot (DL = 0 before it): free with the V9968
                 elsif( wave_pend = '1' and wave_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
                     wave_slot <= '1';                                       -- ZEMMIX.ROM load during RstSeq
                 elsif( wave_pend = '1' and sdr_hold = '1' and RstSeq(4 downto 3) = "11" )then
@@ -2929,9 +2944,9 @@ begin
                 end if;
             end if;
             if( not opl4_wave_ext_g and ff_sdr_seq = "101" )then
-                if( wave_slot = '1' and SdrSta(2 downto 1) = "10" )then
+                if( wave_slot = '1' and SdrSta(2) = '1' and (SdrSta(1) = '0' or vdp_sdram_free_c) )then
                     -- the access is done when its data is on the bus (read) or written,
-                    -- only in a real cpu slot (else it is tried again)
+                    -- only in a real cpu slot or a free vdp slot (else it is tried again)
                     if( wave_we = '0' )then
                         wave_rdat <= X"000000000000" & pMemDat;
                     end if;
@@ -3404,10 +3419,10 @@ begin
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
                         VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
-                        vdp_wait_n_s, vdp_busy);
+                        vdp_wait_n_s, vdp_busy, vdp_field_o, vdp_il_o, vdp_gamma_i);
 
     U21 : vencode
-        port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,
+        port map(clk21m, reset, VideoR(7 downto 2), VideoG(7 downto 2), videoB(7 downto 2), VideoHS_n, VideoVS_n,
                         videoY, videoC, videoV);
 
     U30_1 : msx_psg
