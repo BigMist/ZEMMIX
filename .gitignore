@@ -17,3 +17,6 @@ tmp/
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# release files (cores, ROM, disk image): not in git
+release/
