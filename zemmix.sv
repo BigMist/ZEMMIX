@@ -188,7 +188,7 @@ localparam SDRAM2 = "false";
 v9990_needs_DUAL_SDRAM v9990_needs_DUAL_SDRAM();   // no such module: build error
 `endif
 localparam V9990 = "true";
-`define V99_OSD "ODE,Video out (GFX9000),Auto,V9958,V9990;",
+`define V99_OSD "ODE,HDMI screen,Auto,V9958,V9990;",
 `else
 localparam V9990 = "false";
 `define V99_OSD
@@ -1023,12 +1023,15 @@ audiodac_r(
 //////////////////   VIDEO   //////////////////
 
 // Source: the V9958 of emsx_top or the V9990 (OSD, V9990 builds).  Auto: the
-// V9990 while its display is on (R#8 DISP), else the V9958.  Both give 15 kHz
+// V9990 while its display is on (R#8 DISP), else the V9958.  With HDMI the
+// main screen goes to HDMI and the other one to VGA (switch, not mirror).  Both give 15 kHz
 // lines of 1368 clk_sys; clk_v99 is clk_sys x2 from the same PLL and in phase,
 // so the V9990 outputs are just registered on clk_sys.  Sampled at clk_sys/2
 // (ce_divider 1): exact for P1, P2, B0, B1 and B3, B2 / B4 / B7 lose pixels.
-wire  [5:0] vid_r, vid_g, vid_b;
+wire  [5:0] vid_r, vid_g, vid_b;                // main screen (HDMI, or VGA without HDMI)
 wire        vid_hs, vid_vs, vid_blank;
+wire  [5:0] vga_r, vga_g, vga_b;                // VGA
+wire        vga_hs, vga_vs;
 
 `ifdef V9990
 reg   [5:0] v99_r, v99_g, v99_b;
@@ -1052,6 +1055,17 @@ assign vid_b     = vid_v99 ? v99_b     : B_O;
 assign vid_hs    = vid_v99 ? v99_hs    : HSync;
 assign vid_vs    = vid_v99 ? v99_vs    : VSync;
 assign vid_blank = vid_v99 ? v99_blank : blank;
+
+`ifdef USE_HDMI
+wire vga_v99 = ~vid_v99;                        // VGA: the other screen
+`else
+wire vga_v99 = vid_v99;
+`endif
+assign vga_r     = vga_v99 ? v99_r     : R_O;
+assign vga_g     = vga_v99 ? v99_g     : G_O;
+assign vga_b     = vga_v99 ? v99_b     : B_O;
+assign vga_hs    = vga_v99 ? v99_hs    : HSync;
+assign vga_vs    = vga_v99 ? v99_vs    : VSync;
 `else
 assign vid_r     = R_O;
 assign vid_g     = G_O;
@@ -1059,6 +1073,11 @@ assign vid_b     = B_O;
 assign vid_hs    = HSync;
 assign vid_vs    = VSync;
 assign vid_blank = blank;
+assign vga_r     = R_O;
+assign vga_g     = G_O;
+assign vga_b     = B_O;
+assign vga_hs    = HSync;
+assign vga_vs    = VSync;
 `endif
 
 wire isVGA = status[2];
@@ -1076,11 +1095,11 @@ mist_video
 	.SPI_SCK      (SPI_SCK    ),
 	.SPI_SS3      (SPI_SS3    ),
 	.SPI_DI       (SPI_DI     ),
-	.R            (vid_r ),
-	.G            (vid_g ),
-	.B            (vid_b ),
-	.HSync        (vid_hs),
-	.VSync        (vid_vs),
+	.R            (vga_r ),
+	.G            (vga_g ),
+	.B            (vga_b ),
+	.HSync        (vga_hs),
+	.VSync        (vga_vs),
 	.VGA_R        (VGA_R      ),
 	.VGA_G        (VGA_G      ),
 	.VGA_B        (VGA_B      ),
