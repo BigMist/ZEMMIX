@@ -523,7 +523,6 @@ set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -
 set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -fall
 set_global_assignment -name VERILOG_MACRO "USE_AUDIO_IN=1"
 set_global_assignment -name VERILOG_MACRO "USE_EXTBUS=1"
-set_global_assignment -name QIP_FILE ../misc/opl3/opl3.qip
 set_global_assignment -name QIP_FILE ../misc/opl3fpga/opl3fpga.qip
 set_global_assignment -name QIP_FILE ../misc/opl4/opl4.qip
 set_global_assignment -name VERILOG_FILE "../ocm-pld-dev/ocm_sm/src_addons/peripheral/sm_eseps2.v"
@@ -534,6 +533,5 @@ set_global_assignment -name QIP_FILE ../misc/emsx.qip
 set_global_assignment -name QIP_FILE ../v9968/v9968.qip
 set_global_assignment -name SDC_FILE msx_mist.sdc
 set_global_assignment -name QIP_FILE ../zemmix.qip
-set_global_assignment -name VERILOG_FILE ../misc/StereoVolumeControl.v
 set_global_assignment -name VERILOG_MACRO "SWAP_PORTS=1"
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

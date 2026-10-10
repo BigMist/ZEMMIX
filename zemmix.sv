@@ -751,23 +751,22 @@ wire cpuClk;
 localparam true = "true";
 localparam false = "false";
 
-// OPL3 clock: 50MHz as the OPL3 was designed for, memclk without CLOCK_50
+// MoonSound: OPL3 of Greg Taylor (misc/opl3fpga) + OPL4 wave part, on CLOCK_50
 `ifdef USE_CLOCK_50
-localparam OPL3_FPGA = "true";   // OPL3 of Greg Taylor (misc/opl3fpga), needs 50MHz
+localparam OPL3 = "true";
 localparam OPL3_CLK = 50000000;
 wire clk_opl = CLOCK_50;
 `else
-localparam OPL3_FPGA = "false";  // opl3sw (misc/opl3) on memclk
-localparam OPL3_CLK = 86000000;
-wire clk_opl = memclk;
+localparam OPL3 = "false";        // no MoonSound without CLOCK_50
+localparam OPL3_CLK = 50000000;
+wire clk_opl = 1'b0;
 `endif
 
 emsx_top #(
     .use_wifi_g(true),   // activar interfaz UNAPI
     .use_midi_g(true),   // activar interfaz midi
-    .use_opl3_g(true),  // false. cambiar a true para activar OPL3
-    .opl3_fpga_g(OPL3_FPGA),
-    .use_opl4_g(OPL3_FPGA),    // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
+    .use_opl3_g(OPL3),         // OPL3 (MoonSound FM)
+    .use_opl4_g(OPL3),         // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
     .opl4_wave_ext_g(SDRAM2),  // OPL4 wave memory in the 2nd SDRAM instead of the top 4 MB of the SDRAM
     .use_v9990_g(V9990),       // V9990 (GFX9000), ports 60h-6Fh
     .use_dualpsg_g(false),// activar doble chip PSG

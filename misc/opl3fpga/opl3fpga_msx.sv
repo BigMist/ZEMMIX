@@ -1,7 +1,7 @@
 //
 // opl3fpga_msx.sv
-//   OPL3 of Greg Taylor (gtaylormb/opl3_fpga, LGPL-3.0) behind the same ports as the
-//   opl3sw wrapper of misc/opl3/opl3.sv, so emsx_top can pick one of the two.
+//   OPL3 of Greg Taylor (gtaylormb/opl3_fpga, LGPL-3.0) with the ports emsx_top uses
+//   (those of the old opl3sw wrapper, removed).
 //
 //   * clk_opl must be CLOCK_50: opl3_pkg.sv has CLK_FREQ = 50e6 (sample rate and timers)
 //   * writes: one per rising edge of we, address/data as in the real chip
