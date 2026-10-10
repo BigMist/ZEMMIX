@@ -242,6 +242,7 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # memory and V9990 VRAM, as the SiDi128.  It takes the pins of the cartridge bus: no USE_EXTBUS.
 set_global_assignment -name VERILOG_MACRO "DUAL_SDRAM=1"
 set_global_assignment -name VERILOG_MACRO "V9990=1"
+set_global_assignment -name VERILOG_MACRO "OPL4_SDRAM1=1"
 set_global_assignment -name SYSTEMVERILOG_FILE ../misc/sdram2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../misc/v9990_vram_sdram.sv
 set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_pkg.vhd

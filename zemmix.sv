@@ -176,8 +176,14 @@ localparam bit BIG_OSD = 0;
 
 // 2nd SDRAM (SiDi128 only): the OPL4 wave memory and the V9990 VRAM, the
 // controller is further down (sdram2, after the clocks)
+// OPL4_SDRAM1 (NeptUNO+ dual): the OPL4 wave memory stays in the top 4 MB of the
+// 1st SDRAM, the 2nd SDRAM keeps only the V9990 VRAM
 `ifdef DUAL_SDRAM
+`ifdef OPL4_SDRAM1
+localparam SDRAM2 = "false";
+`else
 localparam SDRAM2 = "true";
+`endif
 `else
 localparam SDRAM2 = "false";
 `endif
@@ -329,7 +335,11 @@ sdram2 #(.P0_LINE(1)) sdram2
 	.ready      ( sdram2_ready    ),
 
 	// OPL4 wave memory
+`ifdef OPL4_SDRAM1
+	.p0_req     ( 1'b0            ),             // OPL4 in the 1st SDRAM
+`else
 	.p0_req     ( wave_req_t      ),
+`endif
 	.p0_ack     ( wave_done_t     ),
 	.p0_we      ( wave_we         ),
 	.p0_be      ( {wave_adr[0], ~wave_adr[0]} ),
