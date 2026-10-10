@@ -283,7 +283,7 @@ wire        wave_req_t, wave_we;
 wire        wave_done_t;
 wire [21:0] wave_adr;
 wire  [7:0] wave_wdat;
-wire [15:0] wave_rdat;
+wire [63:0] wave_rdat;                     // reads: lines of 4 words (sdram2 P0_LINE)
 
 // The OPL4 wave memory (port 0) and the V9990 VRAM (port 1), misc/sdram2.sv:
 // same timing as the SDRAM of emsx_top (memclk, the clock inverted).  Reset
@@ -322,7 +322,7 @@ wire [23:0] v99_s_addr;
 wire [15:0] v99_s_din;
 wire [63:0] v99_s_dout;
 
-sdram2 sdram2
+sdram2 #(.P0_LINE(1)) sdram2
 (
 	.clk        ( memclk          ),
 	.reset      ( ~locked         ),
@@ -367,7 +367,7 @@ assign v99_s_din  = 16'd0;
 `endif
 `else
 assign wave_done_t = 1'b0;
-assign wave_rdat   = 16'hFFFF;
+assign wave_rdat   = 64'hFFFFFFFFFFFFFFFF;
 `endif
 
 //////////////////   V9990 (GFX9000), SiDi128   ///////////////////

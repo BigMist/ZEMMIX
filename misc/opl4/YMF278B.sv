@@ -684,7 +684,7 @@ module YMF278B
 	end
 	
 	//Operation 7: 
-	bit  [17: 0] ACC_L,ACC_R;
+	bit  [20: 0] ACC_L,ACC_R;	// ZEMMIX: 21 bits (24 slots of 16 bits), was 18: wrapped with many loud slots
 	always @(posedge CLK or negedge RST_N) begin
 		bit [ 4:0] S;
 		bit signed [15:0] TEMP_L,TEMP_R;
@@ -702,11 +702,11 @@ module YMF278B
 			TEMP_R = VolCalc(OP7.WD, OP7.LVLR);
 			if (SLOT1_CE) begin
 				if (S == 5'd0) begin
-					ACC_L <= {{2{TEMP_L[15]}},TEMP_L[15:0]};
-					ACC_R <= {{2{TEMP_R[15]}},TEMP_R[15:0]};
+					ACC_L <= {{5{TEMP_L[15]}},TEMP_L[15:0]};
+					ACC_R <= {{5{TEMP_R[15]}},TEMP_R[15:0]};
 				end else begin
-					ACC_L <= ACC_L + {{2{TEMP_L[15]}},TEMP_L[15:0]};
-					ACC_R <= ACC_R + {{2{TEMP_R[15]}},TEMP_R[15:0]};
+					ACC_L <= ACC_L + {{5{TEMP_L[15]}},TEMP_L[15:0]};
+					ACC_R <= ACC_R + {{5{TEMP_R[15]}},TEMP_R[15:0]};
 				end
 			end
 `ifdef DEBUG

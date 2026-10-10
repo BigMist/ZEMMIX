@@ -317,8 +317,8 @@ package YMF278B_PKG;
 		return TEMP;
 	endfunction
 	
-	function bit signed [15:0] TrimWave(bit signed [17:0] WAVE);
-		return WAVE[17] && WAVE[16:15] != 2'b11 ? 16'h8000 : !WAVE[17] && WAVE[16:15] != 2'b00 ? 16'h7FFF : WAVE[15:0];
+	function bit signed [15:0] TrimWave(bit signed [20:0] WAVE);	// ZEMMIX: 21-bit sum of the slots
+		return WAVE[20] && WAVE[19:15] != 5'b11111 ? 16'h8000 : !WAVE[20] && WAVE[19:15] != 5'b00000 ? 16'h7FFF : WAVE[15:0];
 	endfunction
 	
 endpackage

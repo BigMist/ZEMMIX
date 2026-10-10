@@ -22,7 +22,7 @@
 //     next CYCLE1_CE, about 7 CE later, with no wait. The request crosses to clk_bus
 //     (toggle) and that CE is held while the data is not back: the fractional
 //     accumulator keeps its credit and catches up after (the average sample rate does
-//     not move). A one-word cache serves the other byte of the last 16-bit word.
+//     not move). A line cache (32 lines of what a read gives) serves most bytes.
 //     Writes to 000000h-1FFFFFh (the YRW801 ROM) are ignored, as on the MoonSound.
 //   * audio: OUT2 of the engine (PCM with the F9h mix attenuation), through a FIFO
 //     read at a steady 44.1 kHz (no wow and flutter from the held CE), copied to
@@ -32,7 +32,8 @@ module opl4_wave
 #(
     parameter          CE_INC  = 24'd10584,     // 33.8688 MHz / 50 MHz = 10584 / 15625
     parameter          CE_MOD  = 24'd15625,
-    parameter          RD_MAX  = 7'd100         // longest wait of an IN 7Fh in clk_bus cycles (4.7 us)
+    parameter          RD_MAX  = 7'd100,        // longest wait of an IN 7Fh in clk_bus cycles (4.7 us)
+    parameter          LINE_RD = 0              // 1: a read of the wave memory gives 4 words (8 bytes, adr 8-aligned)
 )
 (
     input  wire        clk_bus,
@@ -54,7 +55,7 @@ module opl4_wave
     output reg         mem_we,
     output reg  [21:0] mem_adr,
     output reg   [7:0] mem_wdat,
-    input  wire [15:0] mem_rdat,
+    input  wire [63:0] mem_rdat,                // a line of 4 words with LINE_RD (word 0 in 15-0)
 
     // diagnostics of the ZEMMIX.ROM load (clk_bus), read on regs F0h-F3h and FAh-FFh
     input  wire [23:0] dbg_wr,                  // F0h-F2h: bytes written to the wave memory
@@ -288,42 +289,63 @@ wire [21:0] eng_adr  = {~eng_mcs_n[1], eng_ma};    // MCS_N[1] is low when A21 =
 wire        eng_mreq = ~eng_mrd_n | ~eng_mwr_n;
 reg         eng_mreq_d = 0;
 
-reg  [20:0] c_tag = 0;                          // one-word cache
-reg  [15:0] c_dat = 0;
-reg         c_ok = 0;
+// Line cache: CL lines, fully associative, replaced in turn.  A line is what the memory
+// gives on a read: 4 words (8 bytes) with LINE_RD (the 2nd SDRAM of the SiDi128), else
+// one word.  Each slot reads consecutive bytes, so a line serves several of its samples
+// (with one word per read the engine waited for the memory on almost every byte: with
+// more than ~12 slots playing it made fewer than 44100 samples a second, the music went
+// slower and lower).  Writes go to the memory and to the line if it is here.
+localparam CL = 32;
+function [20:0] tag_of(input [21:0] a);
+    tag_of = LINE_RD ? {a[21:3], 2'b00} : a[21:1];
+endfunction
+function [7:0] byte_of(input [63:0] l, input [2:0] off);
+    byte_of = LINE_RD ? l[{off, 3'b000} +: 8] : (off[0] ? l[15:8] : l[7:0]);
+endfunction
+reg  [20:0] lt [0:CL-1];                        // line tags
+reg  [63:0] ld [0:CL-1];                        // line data (byte k in bits 8k+7..8k)
+reg  [CL-1:0] lv = 0;                           // valid
+reg   [4:0] lrr = 0;                            // next line to replace
+reg         hit;
+reg   [4:0] hit_i;
+integer     ci;
+always @* begin
+    hit = 0; hit_i = 0;
+    for (ci = 0; ci < CL; ci = ci + 1)
+        if (lv[ci] && lt[ci] == tag_of(eng_adr)) begin hit = 1; hit_i = ci[4:0]; end
+end
+wire  [2:0] eng_off = LINE_RD ? eng_adr[2:0] : {2'b00, eng_adr[0]};
 
 reg         e_req_t = 0;                        // request toggle to clk_bus, payload below
 reg         e_we = 0;
 reg  [21:0] e_adr = 0;
+reg   [2:0] e_off = 0;                          // byte of the line asked by the engine
 reg   [7:0] e_wdat = 0;
 reg         b_done_t = 0;                       // done toggle from clk_bus (b_rdat stable then)
-reg  [15:0] b_rdat = 0;
+reg  [63:0] b_rdat = 0;
 reg   [2:0] done_s = 0;
 
 always @(posedge clk_eng) begin
     eng_mreq_d <= eng_mreq;
     done_s     <= {done_s[1:0], b_done_t};
 
-    if (!eng_rst_n) c_ok <= 0;
-
     if (pend) begin
         if (done_s[2] == e_req_t) begin         // the access is back
             pend <= 0;
             if (!e_we) begin
-                c_tag   <= e_adr[21:1];
-                c_dat   <= b_rdat;
-                c_ok    <= eng_rst_n;
-                eng_mdi <= e_adr[0] ? b_rdat[15:8] : b_rdat[7:0];
+                lt[lrr] <= tag_of(e_adr);
+                ld[lrr] <= b_rdat;
+                lv[lrr] <= eng_rst_n;
+                lrr     <= lrr + 1'd1;
+                eng_mdi <= byte_of(b_rdat, e_off);
             end
         end
     end
     else if (eng_mreq && !eng_mreq_d) begin     // a new access of the engine
         if (!eng_mwr_n) begin
             eng_mdi <= eng_mdo;                 // the engine takes MDI back on a write
-            if (eng_adr[21]) begin              // RAM: write it (and the cache), ROM: ignore it
-                if (c_ok && c_tag == eng_adr[21:1]) begin
-                    if (eng_adr[0]) c_dat[15:8] <= eng_mdo; else c_dat[7:0] <= eng_mdo;
-                end
+            if (eng_adr[21]) begin              // RAM: write it (and the line), ROM: ignore it
+                if (hit) ld[hit_i][{eng_off, 3'b000} +: 8] <= eng_mdo;
                 e_we    <= 1;
                 e_adr   <= eng_adr;
                 e_wdat  <= eng_mdo;
@@ -331,16 +353,19 @@ always @(posedge clk_eng) begin
                 pend    <= 1;
             end
         end
-        else if (c_ok && c_tag == eng_adr[21:1]) begin
-            eng_mdi <= eng_adr[0] ? c_dat[15:8] : c_dat[7:0];
+        else if (hit) begin
+            eng_mdi <= byte_of(ld[hit_i], eng_off);
         end
         else begin
             e_we    <= 0;
-            e_adr   <= eng_adr;
+            e_adr   <= LINE_RD ? {eng_adr[21:3], 3'b000} : eng_adr;
+            e_off   <= eng_off;
             e_req_t <= ~e_req_t;
             pend    <= 1;
         end
     end
+
+    if (!eng_rst_n) lv <= 0;
 end
 
 //------------------------------------------------------------------ wave memory, clk_bus side

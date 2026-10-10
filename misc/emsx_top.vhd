@@ -210,7 +210,7 @@ entity emsx_top is
         wave_ext_we     : out   std_logic;
         wave_ext_adr    : out   std_logic_vector( 21 downto 0 );
         wave_ext_wdat   : out   std_logic_vector(  7 downto 0 );
-        wave_ext_rdat   : in    std_logic_vector( 15 downto 0 ) := (others => '1');
+        wave_ext_rdat   : in    std_logic_vector( 63 downto 0 ) := (others => '1');  -- reads: lines of 4 words (word 0 in 15-0)
 
         -- V9990 (use_v9990_g): ports 60h-6Fh to the host bus of v9990_core (misc/v9990_bus.vhd)
         v99_clk         : in    std_logic := '0';                               -- 42.95 MHz, same PLL as clk21m
@@ -722,7 +722,17 @@ architecture RTL of emsx_top is
         );
     end component;
 
+    -- OPL4 wave memory in the 2nd SDRAM: its reads are lines of 4 words (cache of opl4_wave)
+    function line_rd_f( b : boolean ) return integer is
+    begin
+        if( b )then return 1; else return 0; end if;
+    end function;
+    constant line_rd_c : integer := line_rd_f( opl4_wave_ext_g );
+
     component opl4_wave is
+        generic(
+            LINE_RD         : integer := 0                                      -- 1: a read gives a line of 4 words
+        );
         port(
             clk_bus         : in    std_logic;
             reset_bus       : in    std_logic;
@@ -739,7 +749,7 @@ architecture RTL of emsx_top is
             mem_we          : out   std_logic;
             mem_adr         : out   std_logic_vector( 21 downto 0 );
             mem_wdat        : out   std_logic_vector(  7 downto 0 );
-            mem_rdat        : in    std_logic_vector( 15 downto 0 );
+            mem_rdat        : in    std_logic_vector( 63 downto 0 );
             pcm_l           : out   std_logic_vector( 15 downto 0 );
             pcm_r           : out   std_logic_vector( 15 downto 0 );
             dbg_wr          : in    std_logic_vector( 23 downto 0 );
@@ -1113,7 +1123,7 @@ architecture RTL of emsx_top is
     signal  wave_we         : std_logic := '0';
     signal  wave_adr        : std_logic_vector( 21 downto 0 ) := (others => '0');
     signal  wave_wdat       : std_logic_vector(  7 downto 0 ) := (others => '0');
-    signal  wave_rdat       : std_logic_vector( 15 downto 0 ) := (others => '1');
+    signal  wave_rdat       : std_logic_vector( 63 downto 0 ) := (others => '1');
     signal  wave_sdr_adr    : std_logic_vector( 24 downto 0 );
     signal  wave_pend       : std_logic;
     signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
@@ -1128,7 +1138,7 @@ architecture RTL of emsx_top is
     signal  wt_we           : std_logic := '0';
     signal  wt_adr          : std_logic_vector( 21 downto 0 ) := (others => '0');
     signal  wt_wdat         : std_logic_vector(  7 downto 0 ) := (others => '0');
-    signal  wt_rdat         : std_logic_vector( 15 downto 0 );
+    signal  wt_rdat         : std_logic_vector( 63 downto 0 );
     signal  romload_rcv     : std_logic_vector( 23 downto 0 );
     signal  romload_lost    : std_logic_vector( 23 downto 0 );
     signal  romload_wr      : std_logic_vector( 21 downto 0 );
@@ -2923,7 +2933,7 @@ begin
                     -- the access is done when its data is on the bus (read) or written,
                     -- only in a real cpu slot (else it is tried again)
                     if( wave_we = '0' )then
-                        wave_rdat <= pMemDat;
+                        wave_rdat <= X"000000000000" & pMemDat;
                     end if;
                     wave_done_t <= wave_req_t;
                     wave_wait   <= "00";
@@ -3577,6 +3587,9 @@ begin
 
     opl4_u : if use_opl4_g generate
         u_opl4 : opl4_wave
+            generic map(
+                LINE_RD     => line_rd_c
+            )
             port map(
                 clk_bus     => clk21m,
                 reset_bus   => reset,
