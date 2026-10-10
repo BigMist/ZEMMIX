@@ -389,7 +389,7 @@ wire        v99_reset_n, v99_req, v99_wrt, v99_ack, v99_int_n;
 wire  [3:0] v99_adr;
 wire  [7:0] v99_dbo, v99_dbi;
 wire  [7:0] v99_red, v99_grn, v99_blu;
-wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp;
+wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp, v99_il;
 
 `ifdef V9990
 wire        v99_vram_req, v99_vram_we;
@@ -473,7 +473,7 @@ v9990_core v9990
 	.vsync_n_o    ( v99_vsync_n     ),
 	.hblank_o     ( v99_hblank      ),
 	.vblank_o     ( v99_vblank      ),
-	.interlace_o  (                 ),
+	.interlace_o  ( v99_il          ),
 	.disp_en_o    ( v99_disp        ),
 	.vid_x_o      (                 ),
 	.vid_y_o      (                 )
@@ -1042,11 +1042,14 @@ wire  [5:0] vid_r, vid_g, vid_b;                // main screen (HDMI, or VGA wit
 wire        vid_hs, vid_vs, vid_blank;
 wire  [5:0] vga_r, vga_g, vga_b;                // VGA
 wire        vga_hs, vga_vs;
+wire        vid_byp, vga_byp;                   // 31 kHz already (V9990 interlace): no scandoubler
 
 `ifdef V9990
 reg   [5:0] v99_r, v99_g, v99_b;
-reg         v99_hs, v99_vs, v99_blank, v99_on;
+reg         v99_hs, v99_vs, v99_blank, v99_on, v99_ils, v99_wv, v99_fld;
 
+// the field: EO of the V9990 (v9990_cpu), 0 after its reset and flipped at
+// every frame start, when its vsync begins
 always @(posedge clk_sys) begin
 	v99_r     <= v99_red[7:2];
 	v99_g     <= v99_grn[7:2];
@@ -1055,28 +1058,61 @@ always @(posedge clk_sys) begin
 	v99_vs    <= v99_vsync_n;
 	v99_blank <= v99_hblank | v99_vblank;
 	v99_on    <= v99_disp;
+	v99_ils   <= v99_il;
+	if (v99_vs & ~v99_vsync_n) begin
+		v99_fld <= ~v99_fld;
+		v99_wv  <= v99_ils;                     // interlace from a frame start
+	end
+	if (~v99_reset_n) v99_fld <= 1'b0;
 end
 
-wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
+// Interlace at 31 kHz: the odd field one line lower, as on a TV (misc/v99_bob.sv)
+wire  [5:0] wv_r, wv_g, wv_b;
+wire        wv_hs, wv_vs, wv_blank;
 
-assign vid_r     = vid_v99 ? v99_r     : R_O;
-assign vid_g     = vid_v99 ? v99_g     : G_O;
-assign vid_b     = vid_v99 ? v99_b     : B_O;
-assign vid_hs    = vid_v99 ? v99_hs    : HSync;
-assign vid_vs    = vid_v99 ? v99_vs    : VSync;
-assign vid_blank = vid_v99 ? v99_blank : blank;
+v99_bob v99_bob
+(
+	.clk       ( clk_sys    ),
+	.field     ( v99_fld    ),
+	.r_in      ( v99_r      ),
+	.g_in      ( v99_g      ),
+	.b_in      ( v99_b      ),
+	.hs_n_in   ( v99_hs     ),
+	.vs_n_in   ( v99_vs     ),
+	.blank_in  ( v99_blank  ),
+	.r_out     ( wv_r       ),
+	.g_out     ( wv_g       ),
+	.b_out     ( wv_b       ),
+	.hs_n_out  ( wv_hs      ),
+	.vs_n_out  ( wv_vs      ),
+	.blank_out ( wv_blank   )
+);
+
+wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
+assign vid_byp = vid_v99 & v99_wv;              // HDMI: always 31 kHz
+
+assign vid_r     = ~vid_v99 ? R_O   : vid_byp ? wv_r     : v99_r;
+assign vid_g     = ~vid_v99 ? G_O   : vid_byp ? wv_g     : v99_g;
+assign vid_b     = ~vid_v99 ? B_O   : vid_byp ? wv_b     : v99_b;
+assign vid_hs    = ~vid_v99 ? HSync : vid_byp ? wv_hs    : v99_hs;
+assign vid_vs    = ~vid_v99 ? VSync : vid_byp ? wv_vs    : v99_vs;
+assign vid_blank = ~vid_v99 ? blank : vid_byp ? wv_blank : v99_blank;
 
 `ifdef USE_HDMI
 wire vga_v99 = ~vid_v99;                        // VGA: the other screen
 `else
 wire vga_v99 = vid_v99;
 `endif
-assign vga_r     = vga_v99 ? v99_r     : R_O;
-assign vga_g     = vga_v99 ? v99_g     : G_O;
-assign vga_b     = vga_v99 ? v99_b     : B_O;
-assign vga_hs    = vga_v99 ? v99_hs    : HSync;
-assign vga_vs    = vga_v99 ? v99_vs    : VSync;
+assign vga_byp = vga_v99 & v99_wv & ~scandoubler_disable;    // not with 15 kHz RGB
+
+assign vga_r     = ~vga_v99 ? R_O   : vga_byp ? wv_r  : v99_r;
+assign vga_g     = ~vga_v99 ? G_O   : vga_byp ? wv_g  : v99_g;
+assign vga_b     = ~vga_v99 ? B_O   : vga_byp ? wv_b  : v99_b;
+assign vga_hs    = ~vga_v99 ? HSync : vga_byp ? wv_hs : v99_hs;
+assign vga_vs    = ~vga_v99 ? VSync : vga_byp ? wv_vs : v99_vs;
 `else
+assign vid_byp   = 1'b0;
+assign vga_byp   = 1'b0;
 assign vid_r     = R_O;
 assign vid_g     = G_O;
 assign vid_b     = B_O;
@@ -1116,7 +1152,7 @@ mist_video
 	.VGA_VS       (VGA_VS     ),
 	.VGA_HS       (VGA_HS     ),
 	.ce_divider   (3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
-	.scandoubler_disable(scandoubler_disable),   // F18A: 15kHz from the VDP, MiST doubles
+	.scandoubler_disable(scandoubler_disable | vga_byp),   // F18A: 15kHz from the VDP, MiST doubles
 	.no_csync     (1'b1),
 	.scanlines    (status[11:10]),
 	.ypbpr        (1'b0      )
@@ -1160,7 +1196,7 @@ hdmi_video (
 	.SPI_DI      ( SPI_DI     ),
 	.scanlines   (status[11:10]),
 	.ce_divider  ( 3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
-	.scandoubler_disable (1'b0),                 // F18A: HDMI always doubled
+	.scandoubler_disable (vid_byp),              // F18A: HDMI always doubled (31 kHz V9990 interlace: as is)
 	.no_csync    ( 1'b1       ),
 	.ypbpr       ( 1'b0       ),
 	.rotate      ( 2'b00      ),
