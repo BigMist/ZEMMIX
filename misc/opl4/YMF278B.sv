@@ -286,6 +286,10 @@ module YMF278B
 	//Operation 2: MD read, ADP
 	bit  [ 1: 0] OP2_DATA_BIT;
 	bit  [21: 0] OP2_SA;
+	wire [ 8: 0] HDR_TN  = OP2.WTN - 9'd384;
+	wire [21: 0] HDR_ADDR = (OP2.WTN >= 9'd384 && MEMMODE[4:2] != 3'd0) ?
+	                        ({MEMMODE[4:2], 19'd0} + {10'd0, HDR_TN, 3'b000} + {11'd0, HDR_TN, 2'b00}) :
+	                        ({10'd0, OP2.WTN, 3'b000} + {11'd0, OP2.WTN, 2'b00});
 	bit  [15: 0] OP2_LA;
 	bit  [15: 0] OP2_EA;	
 	always @(posedge CLK or negedge RST_N) begin
@@ -316,7 +320,11 @@ module YMF278B
 			WD_READ <= 0;
 		end else begin
 			if (CYCLE0_CE) begin
-				{OP2_DATA_BIT,OP2_SA} <= OP2.LOAD ? {2'b00 ,{10'b0000000000,OP2.WTN,3'b000} + {11'b00000000000,OP2.WTN,2'b00}} + OP2.LOAD_POS : REG_SA_Q;
+				// ZEMMIX: tones 384-511 take their header from MEMMODE[4:2] x 80000h when that
+				// is not 0 (wave table header, R#2), as the chip and openMSX: the RAM at
+				// 200000h with R#2 = 10h (MoonBlaster wavekits, RoboPlay); it was always
+				// tone x 12 in the ROM (a header of garbage for the tones of the RAM)
+				{OP2_DATA_BIT,OP2_SA} <= OP2.LOAD ? {2'b00, HDR_ADDR} + OP2.LOAD_POS : REG_SA_Q;
 				OP2_LA <= REG_LA_Q;
 				OP2_EA <= ~(REG_EA_Q) + 16'd1;
 				case (CYCLE_NUM[2:1])
@@ -623,14 +631,17 @@ module YMF278B
 			if (SLOT1_CE) begin
 				if (OP5_LDIR) TL_RAM_D <= {OP5_TL,10'h000};
 				else begin
-					if (TL_INT > OP5_TL) begin
-						TL_RAM_D <= {TL_INT,TL_FRAC} + 17'd19;
+					// ZEMMIX: the level moves towards the TL written (openMSX: one step
+					// every 27 samples softer, every 13.5 louder); the signs were swapped:
+					// it went away from it and wrapped (full level / -48 dB in turn)
+					if (TL_INT < OP5_TL) begin
+						TL_RAM_D <= {TL_INT,TL_FRAC} + 17'd38;
 					end
-					else if (TL_INT < OP5_TL) begin
-						TL_RAM_D <= {TL_INT,TL_FRAC} - 17'd38;
+					else if (TL_INT > OP5_TL) begin
+						TL_RAM_D <= {TL_INT,TL_FRAC} - 17'd76;
 					end
 					else begin
-						TL_RAM_D <= {TL_INT,TL_FRAC};
+						TL_RAM_D <= {TL_INT,10'h000};
 					end
 				end
 				

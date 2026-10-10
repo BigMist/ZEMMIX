@@ -245,17 +245,22 @@ reg  [1:0] st_s0 = 2'b00;
 reg  [1:0] qb_s = 2'b00;                        // queue busy
 reg  [7:0] idx_b = 0;                           // last index written to 7Eh
 reg        wr4_d = 0;
+// diagnostics (regs F4h-F7h of 7Eh / 7Fh): FIFO empty while playing / full (since
+// reset), counted in the audio part below
+reg  [15:0] sf_unf = 0, sf_ovf = 0;
 reg  [7:0] dbg_q;
 always @(*) begin
     case (idx_b)
         8'hF0: dbg_q = dbg_wr[7:0];    8'hF1: dbg_q = dbg_wr[15:8];   8'hF2: dbg_q = dbg_wr[23:16];
         8'hF3: dbg_q = dbg_flags;
+        8'hF4: dbg_q = sf_unf[7:0];    8'hF5: dbg_q = sf_unf[15:8];   // FIFO empty (clk_eng, slow)
+        8'hF6: dbg_q = sf_ovf[7:0];    8'hF7: dbg_q = sf_ovf[15:8];   // FIFO full
         8'hFA: dbg_q = dbg_rcv[7:0];   8'hFB: dbg_q = dbg_rcv[15:8];  8'hFC: dbg_q = dbg_rcv[23:16];
         8'hFD: dbg_q = dbg_lost[7:0];  8'hFE: dbg_q = dbg_lost[15:8]; 8'hFF: dbg_q = dbg_lost[23:16];
         default: dbg_q = 8'h00;
     endcase
 end
-wire       idx_dbg = (idx_b[7:4] == 4'hF) && (idx_b[3:2] == 2'b00 || idx_b[3:0] >= 4'hA);
+wire       idx_dbg = (idx_b[7:4] == 4'hF) && (idx_b[3:0] <= 4'h7 || idx_b[3:0] >= 4'hA);
 always @(posedge clk_bus) begin
     rdd_s  <= {rdd_s[1:0], rd_done_t};
     wr4_d  <= bus_cs && !bus_wr_n && bus_a == 3'd4;
@@ -380,6 +385,7 @@ always @(posedge clk_eng) begin
         sfifo[sf_wp] <= {out2_l, out2_r};
         sf_wp <= sf_wp + 1'd1;
     end
+    if (sample_ce_d && sf_lvl == 5'd31 && sf_ovf != 16'hFFFF) sf_ovf <= sf_ovf + 1'd1;   // sample lost
 
     if (sacc + 19'd441 >= 19'd500000) begin     // a 44.1 kHz tick
         sacc <= sacc + 19'd441 - 19'd500000;
@@ -388,6 +394,7 @@ always @(posedge clk_eng) begin
             sf_rp   <= sf_rp + 1'd1;
             hold_tg <= ~hold_tg;
         end
+        else if (sf_run && sf_unf != 16'hFFFF) sf_unf <= sf_unf + 1'd1;  // empty: the last one again
         if (sf_lvl >= 5'd16) sf_run <= 1;       // start from half full
         else if (sf_lvl == 0) sf_run <= 0;      // empty (engine stopped): fill again
     end
@@ -396,6 +403,8 @@ always @(posedge clk_eng) begin
     if (!eng_rst_n) begin
         sf_rp  <= sf_wp;
         sf_run <= 0;
+        sf_unf <= 0;
+        sf_ovf <= 0;
     end
 end
 reg  [2:0] tg_s = 0;

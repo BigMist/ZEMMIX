@@ -261,8 +261,11 @@ package YMF278B_PKG;
 		bit [21:0] SUM;
 		
 		PHASE_NEG = 7'h40 - PHASE;
-		TEMP0 = $signed(WAVE0) * PHASE_NEG;
-		TEMP1 = $signed(WAVE1) * PHASE;
+		// ZEMMIX: signed x signed (an unsigned PHASE made the products unsigned: a
+		// jump of 65536 x PHASE when the two samples have different signs, a click on
+		// every zero crossing)
+		TEMP0 = $signed(WAVE0) * $signed({1'b0, PHASE_NEG});
+		TEMP1 = $signed(WAVE1) * $signed({2'b00, PHASE});
 		SUM = $signed(TEMP0) + $signed(TEMP1);
 	
 		return SUM[21:6];
