@@ -30,7 +30,8 @@
 
 module sdram2 #(
 	parameter CLK_HZ   = 85909091,
-	parameter RD_DELAY = 3
+	parameter RD_DELAY = 3,
+	parameter P0_LINE  = 0          // 1: port 0 reads are lines of 4 words too (OPL4 wave cache)
 )(
 	input             clk,
 	input             reset,
@@ -42,7 +43,7 @@ module sdram2 #(
 	input      [1:0]  p0_be,
 	input     [23:0]  p0_addr,
 	input     [15:0]  p0_din,
-	output reg [15:0] p0_dout,
+	output reg [63:0] p0_dout,          // P0_LINE: 4 words (word 0 in 15-0), else the word in 15-0
 
 	input             p1_req,
 	output reg        p1_ack = 1'b0,
@@ -100,7 +101,7 @@ reg  [1:0] brst = 2'd0;                // line read: READs left after the first
 reg  [1:0] inflight = 2'b00;           // ports with an access given and not acked
 reg        acc_port, acc_we, last_port = 1'b1;
 reg  [1:0] acc_be;
-wire       line = acc_port & ~acc_we;      // port 1 reads: lines
+wire       line = (acc_port | P0_LINE) & ~acc_we;   // port 1 reads (and port 0 with P0_LINE): lines
 reg  [8:0] acc_col;
 reg [15:0] acc_din;
 reg [RD_DELAY:0] rd_pipe = 0;          // a READ RD_DELAY + 1 memclk ago: [RD_DELAY]
@@ -131,7 +132,11 @@ always @(posedge clk) begin
 			p1_dout <= {dq_in, p1_dout[63:16]};           // 4 words: word 0 ends in 15-0
 			if (rd_last[RD_DELAY]) begin p1_ack <= p1_req; inflight[1] <= 1'b0; end
 		end
-		else begin p0_dout <= dq_in; p0_ack <= p0_req; inflight[0] <= 1'b0; end
+		else if (P0_LINE) begin
+			p0_dout <= {dq_in, p0_dout[63:16]};
+			if (rd_last[RD_DELAY]) begin p0_ack <= p0_req; inflight[0] <= 1'b0; end
+		end
+		else begin p0_dout <= {48'd0, dq_in}; p0_ack <= p0_req; inflight[0] <= 1'b0; end
 	end
 
 	if (rst_s[1]) begin
@@ -215,7 +220,7 @@ always @(posedge clk) begin
 			cmd       <= CMD_ACT;
 			step      <= 2'd2;
 			// tRC: next ACT 6 memclk later; a line: 3 READ more, then tRP
-			busy      <= (take1 & ~p1_we) ? 4'd8 : 4'd5;
+			busy      <= (take1 ? ~p1_we : (P0_LINE && !p0_we)) ? 4'd8 : 4'd5;
 		end
 	end
 

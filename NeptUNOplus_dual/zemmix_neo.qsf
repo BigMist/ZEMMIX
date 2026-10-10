@@ -199,98 +199,15 @@ set_location_assignment PIN_AE3 -to joy_xload
 set_location_assignment PIN_AF5 -to joy_xdata
 
 
-set_location_assignment PIN_A13 -to BUS_N43
-set_location_assignment PIN_C14 -to BUS_nWAIT
-set_location_assignment PIN_B15 -to BUS_nWR
-set_location_assignment PIN_A21 -to BUS_nM1
-set_location_assignment PIN_C13 -to BUS_nMREQ
-set_location_assignment PIN_C15 -to BUS_nRD
-set_location_assignment PIN_A17 -to BUS_nRESET
-set_location_assignment PIN_A15 -to BUS_nIORQ
-set_location_assignment PIN_B11 -to BUS_nINT
-
-set_location_assignment PIN_A6 -to BUS_CLK
-set_location_assignment PIN_C12 -to BUS_nRFSH
-set_location_assignment PIN_E1 -to BUS_A[15]
-set_location_assignment PIN_B2 -to BUS_A[14]
-set_location_assignment PIN_E2 -to BUS_A[13]
-set_location_assignment PIN_A3 -to BUS_A[12]
-set_location_assignment PIN_B23 -to BUS_A[11]
-set_location_assignment PIN_B22 -to BUS_A[10]
-set_location_assignment PIN_B21 -to BUS_A[9]
-set_location_assignment PIN_A23 -to BUS_A[8]
-set_location_assignment PIN_B18 -to BUS_A[7]
-set_location_assignment PIN_A18 -to BUS_A[6]
-set_location_assignment PIN_C17 -to BUS_A[5]
-set_location_assignment PIN_A20 -to BUS_A[4]
-set_location_assignment PIN_A11 -to BUS_A[3]
-set_location_assignment PIN_A10 -to BUS_A[2]
-set_location_assignment PIN_A9 -to BUS_A[1]
-set_location_assignment PIN_A8 -to BUS_A[0]
-
-set_location_assignment PIN_A5 -to BUS_D[7]
-set_location_assignment PIN_A7 -to BUS_D[6]
-set_location_assignment PIN_B9 -to BUS_D[5]
-set_location_assignment PIN_B10 -to BUS_D[4]
-set_location_assignment PIN_C10 -to BUS_D[3]
-set_location_assignment PIN_B7 -to BUS_D[2]
-set_location_assignment PIN_B6 -to BUS_D[1]
-set_location_assignment PIN_B5 -to BUS_D[0]
 
 
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[0]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[1]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[2]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[3]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[4]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[5]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[6]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[7]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_D[8]
-
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[0]
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[1]
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[2]
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[3]
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[4]
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[5]
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[6]
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_D[7]
-
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[0]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[1]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[2]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[3]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[4]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[5]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[6]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[7]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[8]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[9]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[10]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[13]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[14]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to BUS_A[15]
 
 
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nRD
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nWR
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nM1
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nMREQ
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nIORQ
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nWAIT
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nINT
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_RFSH
-set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BUS_nRESET
 
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[1]
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[2]
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[3]
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[4]
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[5]
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[6]
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[7]
-set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to BUS_D[0]
+
+
+
+
 
 
 set_global_assignment -name VERILOG_MACRO "I2S_AUDIO=1"
@@ -319,5 +236,100 @@ set_global_assignment -name QIP_FILE ../T80/T80.qip
 set_global_assignment -name QIP_FILE "../mist-modules/mist.qip"
 set_global_assignment -name QIP_FILE ../zemmix.qip
 set_global_assignment -name VERILOG_FILE pll.v
-set_global_assignment -name VERILOG_MACRO "USE_EXTBUS=1"
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
+
+# ---- 2nd SDRAM (NeptUNO+ dual SDRAM, pins of delgrom/NeoGeo_FPGA neptunoplus_dr): OPL4 wave
+# memory and V9990 VRAM, as the SiDi128.  It takes the pins of the cartridge bus: no USE_EXTBUS.
+set_global_assignment -name VERILOG_MACRO "DUAL_SDRAM=1"
+set_global_assignment -name VERILOG_MACRO "V9990=1"
+set_global_assignment -name VERILOG_MACRO "OPL4_SDRAM1=1"
+set_global_assignment -name SYSTEMVERILOG_FILE ../misc/sdram2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../misc/v9990_vram_sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../misc/v99_bob.sv
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_pkg.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_cpu.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_raster.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_bitmap.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_pattern.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_sprites.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_cmd.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_core.vhd
+set_global_assignment -name VHDL_FILE ../v9990/rtl/v9990_vram_cache.vhd
+set_location_assignment PIN_B10 -to SDRAM2_A[0]
+set_location_assignment PIN_A11 -to SDRAM2_A[1]
+set_location_assignment PIN_B11 -to SDRAM2_A[2]
+set_location_assignment PIN_A13 -to SDRAM2_A[3]
+set_location_assignment PIN_B21 -to SDRAM2_A[4]
+set_location_assignment PIN_B22 -to SDRAM2_A[5]
+set_location_assignment PIN_B23 -to SDRAM2_A[6]
+set_location_assignment PIN_A23 -to SDRAM2_A[7]
+set_location_assignment PIN_A16 -to SDRAM2_A[8]
+set_location_assignment PIN_C16 -to SDRAM2_A[9]
+set_location_assignment PIN_A10 -to SDRAM2_A[10]
+set_location_assignment PIN_A21 -to SDRAM2_A[11]
+set_location_assignment PIN_C12 -to SDRAM2_A[12]
+set_location_assignment PIN_A5 -to SDRAM2_DQ[0]
+set_location_assignment PIN_B5 -to SDRAM2_DQ[1]
+set_location_assignment PIN_B6 -to SDRAM2_DQ[2]
+set_location_assignment PIN_B7 -to SDRAM2_DQ[3]
+set_location_assignment PIN_A3 -to SDRAM2_DQ[4]
+set_location_assignment PIN_E2 -to SDRAM2_DQ[5]
+set_location_assignment PIN_B2 -to SDRAM2_DQ[6]
+set_location_assignment PIN_E1 -to SDRAM2_DQ[7]
+set_location_assignment PIN_A15 -to SDRAM2_DQ[8]
+set_location_assignment PIN_C15 -to SDRAM2_DQ[9]
+set_location_assignment PIN_B15 -to SDRAM2_DQ[10]
+set_location_assignment PIN_B13 -to SDRAM2_DQ[11]
+set_location_assignment PIN_A18 -to SDRAM2_DQ[12]
+set_location_assignment PIN_C19 -to SDRAM2_DQ[13]
+set_location_assignment PIN_B18 -to SDRAM2_DQ[14]
+set_location_assignment PIN_A17 -to SDRAM2_DQ[15]
+set_location_assignment PIN_A9 -to SDRAM2_BA[0]
+set_location_assignment PIN_C10 -to SDRAM2_BA[1]
+set_location_assignment PIN_C17 -to SDRAM2_DQMH
+set_location_assignment PIN_C14 -to SDRAM2_DQML
+set_location_assignment PIN_A8 -to SDRAM2_nRAS
+set_location_assignment PIN_A7 -to SDRAM2_nCAS
+set_location_assignment PIN_A6 -to SDRAM2_nWE
+set_location_assignment PIN_B9 -to SDRAM2_nCS
+set_location_assignment PIN_A20 -to SDRAM2_CKE
+set_location_assignment PIN_C13 -to SDRAM2_CLK
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_DQ[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_A[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_BA[0]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_BA[1]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_DQMH
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_DQML
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_nRAS
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_nCAS
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_nWE
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM2_nCS
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[*]
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to SDRAM2_DQ[*]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[0]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[1]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[2]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[3]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[4]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[5]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[6]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[7]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[8]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[9]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[10]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[11]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[12]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[13]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[14]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM2_DQ[15]
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_A[*]
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_DQ[*]
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_BA[*]
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_DQML
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_DQMH
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_nRAS
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_nCAS
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_nWE
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_nCS
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_CKE
+set_instance_assignment -name CURRENT_STRENGTH_NEW "MAXIMUM CURRENT" -to SDRAM2_CLK

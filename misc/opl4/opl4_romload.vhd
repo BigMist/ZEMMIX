@@ -39,14 +39,14 @@ entity opl4_romload is
         c_we        : in    std_logic;
         c_adr       : in    std_logic_vector( 21 downto 0 );
         c_wdat      : in    std_logic_vector(  7 downto 0 );
-        c_rdat      : out   std_logic_vector( 15 downto 0 );
+        c_rdat      : out   std_logic_vector( 63 downto 0 );       -- a line of 4 words (2nd SDRAM) or the word in 15-0
 
         m_req_t     : out   std_logic;
         m_done_t    : in    std_logic;
         m_we        : out   std_logic;
         m_adr       : out   std_logic_vector( 21 downto 0 );
         m_wdat      : out   std_logic_vector(  7 downto 0 );
-        m_rdat      : in    std_logic_vector( 15 downto 0 );
+        m_rdat      : in    std_logic_vector( 63 downto 0 );
 
         rcv_cnt     : out   std_logic_vector( 23 downto 0 );
         lost_cnt    : out   std_logic_vector( 23 downto 0 );
@@ -76,7 +76,7 @@ architecture RTL of opl4_romload is
     signal  ff_m_wdat   : std_logic_vector(  7 downto 0 ) := (others => '0');
     signal  ff_own      : std_logic := '0';                     -- 1 = the access in flight is the client's
     signal  ff_c_done_t : std_logic := '0';
-    signal  ff_c_rdat   : std_logic_vector( 15 downto 0 ) := (others => '1');
+    signal  ff_c_rdat   : std_logic_vector( 63 downto 0 ) := (others => '1');
     signal  ff_rd_ok    : std_logic := '0';                     -- ff_q holds fifo(ff_rp)
     signal  m_busy      : std_logic;
     signal  c_pend      : std_logic;

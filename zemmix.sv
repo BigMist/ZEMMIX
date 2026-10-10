@@ -176,8 +176,14 @@ localparam bit BIG_OSD = 0;
 
 // 2nd SDRAM (SiDi128 only): the OPL4 wave memory and the V9990 VRAM, the
 // controller is further down (sdram2, after the clocks)
+// OPL4_SDRAM1 (NeptUNO+ dual): the OPL4 wave memory stays in the top 4 MB of the
+// 1st SDRAM, the 2nd SDRAM keeps only the V9990 VRAM
 `ifdef DUAL_SDRAM
+`ifdef OPL4_SDRAM1
+localparam SDRAM2 = "false";
+`else
 localparam SDRAM2 = "true";
+`endif
 `else
 localparam SDRAM2 = "false";
 `endif
@@ -188,7 +194,7 @@ localparam SDRAM2 = "false";
 v9990_needs_DUAL_SDRAM v9990_needs_DUAL_SDRAM();   // no such module: build error
 `endif
 localparam V9990 = "true";
-`define V99_OSD "ODE,Video out (GFX9000),Auto,V9958,V9990;",
+`define V99_OSD "ODE,HDMI screen,Auto,V9958,V9990;",
 `else
 localparam V9990 = "false";
 `define V99_OSD
@@ -210,19 +216,19 @@ localparam CONF_STR = {
 	"ZEMMIX;;",
 	"S0U,IMGVHD,Load virtual disk;",
 	"P1,Configuration Switches;",
-   "P1O1,CPU Clock,Standard,Turbo;",
-   "P1O2,Scandoubler,VGA,RGB;",
+    "P1O1,CPU Clock,Standard,Turbo;",
+    "P1O2,Scandoubler,VGA,RGB;",
 	"P1O3,VGA Output,CRT,LCD;",
 	"P1O4,Slot1,External (Optional S3),MegaSCC+ 2MB;",
-   "P1O56,Slot2,External,MegaRAM 1MB/1MB,MegaSCC+ 2MB,MegaRAM 2MB/2MB;",
+    "P1O56,Slot2,External,MegaRAM 1MB/1MB,MegaSCC+ 2MB,MegaRAM 2MB/2MB;",
 	"P1O7,RAM,2048kB,4096kB;",
 	"P1O8,internal MegaSD,Off,on;",
-   "O9,Tape sound,OFF,ON;",
-   "OAB,Scanlines,Off,25%,50%,75%;",
-   "OC,MoonSound (OPL3/OPL4),On,Off;",
+    "O9,Tape sound,OFF,ON;",
+    "OAB,Scanlines,Off,25%,50%,75%;",
+    "OC,MoonSound (OPL3/OPL4),On,Off;",
    `V99_OSD
-   "T0,Reset;",
-	"V,v1.0.",`BUILD_DATE
+    "T0,Reset;",
+	"V,v2.0.",`BUILD_DATE
 };
 
 ////////////////////   CLOCKS   ///////////////////
@@ -283,7 +289,7 @@ wire        wave_req_t, wave_we;
 wire        wave_done_t;
 wire [21:0] wave_adr;
 wire  [7:0] wave_wdat;
-wire [15:0] wave_rdat;
+wire [63:0] wave_rdat;                     // reads: lines of 4 words (sdram2 P0_LINE)
 
 // The OPL4 wave memory (port 0) and the V9990 VRAM (port 1), misc/sdram2.sv:
 // same timing as the SDRAM of emsx_top (memclk, the clock inverted).  Reset
@@ -322,14 +328,18 @@ wire [23:0] v99_s_addr;
 wire [15:0] v99_s_din;
 wire [63:0] v99_s_dout;
 
-sdram2 sdram2
+sdram2 #(.P0_LINE(1)) sdram2
 (
 	.clk        ( memclk          ),
 	.reset      ( ~locked         ),
 	.ready      ( sdram2_ready    ),
 
 	// OPL4 wave memory
+`ifdef OPL4_SDRAM1
+	.p0_req     ( 1'b0            ),             // OPL4 in the 1st SDRAM
+`else
 	.p0_req     ( wave_req_t      ),
+`endif
 	.p0_ack     ( wave_done_t     ),
 	.p0_we      ( wave_we         ),
 	.p0_be      ( {wave_adr[0], ~wave_adr[0]} ),
@@ -367,7 +377,7 @@ assign v99_s_din  = 16'd0;
 `endif
 `else
 assign wave_done_t = 1'b0;
-assign wave_rdat   = 16'hFFFF;
+assign wave_rdat   = 64'hFFFFFFFFFFFFFFFF;
 `endif
 
 //////////////////   V9990 (GFX9000), SiDi128   ///////////////////
@@ -379,7 +389,7 @@ wire        v99_reset_n, v99_req, v99_wrt, v99_ack, v99_int_n;
 wire  [3:0] v99_adr;
 wire  [7:0] v99_dbo, v99_dbi;
 wire  [7:0] v99_red, v99_grn, v99_blu;
-wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp;
+wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp, v99_il;
 
 `ifdef V9990
 wire        v99_vram_req, v99_vram_we;
@@ -463,7 +473,7 @@ v9990_core v9990
 	.vsync_n_o    ( v99_vsync_n     ),
 	.hblank_o     ( v99_hblank      ),
 	.vblank_o     ( v99_vblank      ),
-	.interlace_o  (                 ),
+	.interlace_o  ( v99_il          ),
 	.disp_en_o    ( v99_disp        ),
 	.vid_x_o      (                 ),
 	.vid_y_o      (                 )
@@ -751,23 +761,22 @@ wire cpuClk;
 localparam true = "true";
 localparam false = "false";
 
-// OPL3 clock: 50MHz as the OPL3 was designed for, memclk without CLOCK_50
+// MoonSound: OPL3 of Greg Taylor (misc/opl3fpga) + OPL4 wave part, on CLOCK_50
 `ifdef USE_CLOCK_50
-localparam OPL3_FPGA = "true";   // OPL3 of Greg Taylor (misc/opl3fpga), needs 50MHz
+localparam OPL3 = "true";
 localparam OPL3_CLK = 50000000;
 wire clk_opl = CLOCK_50;
 `else
-localparam OPL3_FPGA = "false";  // opl3sw (misc/opl3) on memclk
-localparam OPL3_CLK = 86000000;
-wire clk_opl = memclk;
+localparam OPL3 = "false";        // no MoonSound without CLOCK_50
+localparam OPL3_CLK = 50000000;
+wire clk_opl = 1'b0;
 `endif
 
 emsx_top #(
     .use_wifi_g(true),   // activar interfaz UNAPI
     .use_midi_g(true),   // activar interfaz midi
-    .use_opl3_g(true),  // false. cambiar a true para activar OPL3
-    .opl3_fpga_g(OPL3_FPGA),
-    .use_opl4_g(OPL3_FPGA),    // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
+    .use_opl3_g(OPL3),         // OPL3 (MoonSound FM)
+    .use_opl4_g(OPL3),         // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
     .opl4_wave_ext_g(SDRAM2),  // OPL4 wave memory in the 2nd SDRAM instead of the top 4 MB of the SDRAM
     .use_v9990_g(V9990),       // V9990 (GFX9000), ports 60h-6Fh
     .use_dualpsg_g(false),// activar doble chip PSG
@@ -1024,17 +1033,23 @@ audiodac_r(
 //////////////////   VIDEO   //////////////////
 
 // Source: the V9958 of emsx_top or the V9990 (OSD, V9990 builds).  Auto: the
-// V9990 while its display is on (R#8 DISP), else the V9958.  Both give 15 kHz
+// V9990 while its display is on (R#8 DISP), else the V9958.  With HDMI the
+// main screen goes to HDMI and the other one to VGA (switch, not mirror).  Both give 15 kHz
 // lines of 1368 clk_sys; clk_v99 is clk_sys x2 from the same PLL and in phase,
 // so the V9990 outputs are just registered on clk_sys.  Sampled at clk_sys/2
 // (ce_divider 1): exact for P1, P2, B0, B1 and B3, B2 / B4 / B7 lose pixels.
-wire  [5:0] vid_r, vid_g, vid_b;
+wire  [5:0] vid_r, vid_g, vid_b;                // main screen (HDMI, or VGA without HDMI)
 wire        vid_hs, vid_vs, vid_blank;
+wire  [5:0] vga_r, vga_g, vga_b;                // VGA
+wire        vga_hs, vga_vs;
+wire        vid_byp, vga_byp;                   // 31 kHz already (V9990 interlace): no scandoubler
 
 `ifdef V9990
 reg   [5:0] v99_r, v99_g, v99_b;
-reg         v99_hs, v99_vs, v99_blank, v99_on;
+reg         v99_hs, v99_vs, v99_blank, v99_on, v99_ils, v99_wv, v99_fld;
 
+// the field: EO of the V9990 (v9990_cpu), 0 after its reset and flipped at
+// every frame start, when its vsync begins
 always @(posedge clk_sys) begin
 	v99_r     <= v99_red[7:2];
 	v99_g     <= v99_grn[7:2];
@@ -1043,23 +1058,72 @@ always @(posedge clk_sys) begin
 	v99_vs    <= v99_vsync_n;
 	v99_blank <= v99_hblank | v99_vblank;
 	v99_on    <= v99_disp;
+	v99_ils   <= v99_il;
+	if (v99_vs & ~v99_vsync_n) begin
+		v99_fld <= ~v99_fld;
+		v99_wv  <= v99_ils;                     // interlace from a frame start
+	end
+	if (~v99_reset_n) v99_fld <= 1'b0;
 end
 
-wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
+// Interlace at 31 kHz: the odd field one line lower, as on a TV (misc/v99_bob.sv)
+wire  [5:0] wv_r, wv_g, wv_b;
+wire        wv_hs, wv_vs, wv_blank;
 
-assign vid_r     = vid_v99 ? v99_r     : R_O;
-assign vid_g     = vid_v99 ? v99_g     : G_O;
-assign vid_b     = vid_v99 ? v99_b     : B_O;
-assign vid_hs    = vid_v99 ? v99_hs    : HSync;
-assign vid_vs    = vid_v99 ? v99_vs    : VSync;
-assign vid_blank = vid_v99 ? v99_blank : blank;
+v99_bob v99_bob
+(
+	.clk       ( clk_sys    ),
+	.field     ( v99_fld    ),
+	.r_in      ( v99_r      ),
+	.g_in      ( v99_g      ),
+	.b_in      ( v99_b      ),
+	.hs_n_in   ( v99_hs     ),
+	.vs_n_in   ( v99_vs     ),
+	.blank_in  ( v99_blank  ),
+	.r_out     ( wv_r       ),
+	.g_out     ( wv_g       ),
+	.b_out     ( wv_b       ),
+	.hs_n_out  ( wv_hs      ),
+	.vs_n_out  ( wv_vs      ),
+	.blank_out ( wv_blank   )
+);
+
+wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
+assign vid_byp = vid_v99 & v99_wv;              // HDMI: always 31 kHz
+
+assign vid_r     = ~vid_v99 ? R_O   : vid_byp ? wv_r     : v99_r;
+assign vid_g     = ~vid_v99 ? G_O   : vid_byp ? wv_g     : v99_g;
+assign vid_b     = ~vid_v99 ? B_O   : vid_byp ? wv_b     : v99_b;
+assign vid_hs    = ~vid_v99 ? HSync : vid_byp ? wv_hs    : v99_hs;
+assign vid_vs    = ~vid_v99 ? VSync : vid_byp ? wv_vs    : v99_vs;
+assign vid_blank = ~vid_v99 ? blank : vid_byp ? wv_blank : v99_blank;
+
+`ifdef USE_HDMI
+wire vga_v99 = ~vid_v99;                        // VGA: the other screen
 `else
+wire vga_v99 = vid_v99;
+`endif
+assign vga_byp = vga_v99 & v99_wv & ~scandoubler_disable;    // not with 15 kHz RGB
+
+assign vga_r     = ~vga_v99 ? R_O   : vga_byp ? wv_r  : v99_r;
+assign vga_g     = ~vga_v99 ? G_O   : vga_byp ? wv_g  : v99_g;
+assign vga_b     = ~vga_v99 ? B_O   : vga_byp ? wv_b  : v99_b;
+assign vga_hs    = ~vga_v99 ? HSync : vga_byp ? wv_hs : v99_hs;
+assign vga_vs    = ~vga_v99 ? VSync : vga_byp ? wv_vs : v99_vs;
+`else
+assign vid_byp   = 1'b0;
+assign vga_byp   = 1'b0;
 assign vid_r     = R_O;
 assign vid_g     = G_O;
 assign vid_b     = B_O;
 assign vid_hs    = HSync;
 assign vid_vs    = VSync;
 assign vid_blank = blank;
+assign vga_r     = R_O;
+assign vga_g     = G_O;
+assign vga_b     = B_O;
+assign vga_hs    = HSync;
+assign vga_vs    = VSync;
 `endif
 
 wire isVGA = status[2];
@@ -1077,18 +1141,18 @@ mist_video
 	.SPI_SCK      (SPI_SCK    ),
 	.SPI_SS3      (SPI_SS3    ),
 	.SPI_DI       (SPI_DI     ),
-	.R            (vid_r ),
-	.G            (vid_g ),
-	.B            (vid_b ),
-	.HSync        (vid_hs),
-	.VSync        (vid_vs),
+	.R            (vga_r ),
+	.G            (vga_g ),
+	.B            (vga_b ),
+	.HSync        (vga_hs),
+	.VSync        (vga_vs),
 	.VGA_R        (VGA_R      ),
 	.VGA_G        (VGA_G      ),
 	.VGA_B        (VGA_B      ),
 	.VGA_VS       (VGA_VS     ),
 	.VGA_HS       (VGA_HS     ),
 	.ce_divider   (3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
-	.scandoubler_disable(scandoubler_disable),   // F18A: 15kHz from the VDP, MiST doubles
+	.scandoubler_disable(scandoubler_disable | vga_byp),   // F18A: 15kHz from the VDP, MiST doubles
 	.no_csync     (1'b1),
 	.scanlines    (status[11:10]),
 	.ypbpr        (1'b0      )
@@ -1132,7 +1196,7 @@ hdmi_video (
 	.SPI_DI      ( SPI_DI     ),
 	.scanlines   (status[11:10]),
 	.ce_divider  ( 3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
-	.scandoubler_disable (1'b0),                 // F18A: HDMI always doubled
+	.scandoubler_disable (vid_byp),              // F18A: HDMI always doubled (31 kHz V9990 interlace: as is)
 	.no_csync    ( 1'b1       ),
 	.ypbpr       ( 1'b0       ),
 	.rotate      ( 2'b00      ),

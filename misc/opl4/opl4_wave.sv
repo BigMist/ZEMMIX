@@ -16,12 +16,13 @@
 //     is low until then, straight from the bus signals (RD_MAX at most); a Z80 at
 //     3.58 MHz that does not wait samples about 700 ns after RD.
 //     bus_status {LD, BUSY} (BUSY also while the queue is not empty) is given for 7Eh
-//     and to be ORed into the C4h status.
+//     and to be ORed into the C4h status.  Reads of C4h are not queued: one pending
+//     read is played when the queue is empty (LD2), and it does not make BUSY.
 //   * memory: the engine asks for a byte when a window starts and samples it at the
 //     next CYCLE1_CE, about 7 CE later, with no wait. The request crosses to clk_bus
 //     (toggle) and that CE is held while the data is not back: the fractional
 //     accumulator keeps its credit and catches up after (the average sample rate does
-//     not move). A one-word cache serves the other byte of the last 16-bit word.
+//     not move). A line cache (32 lines of what a read gives) serves most bytes.
 //     Writes to 000000h-1FFFFFh (the YRW801 ROM) are ignored, as on the MoonSound.
 //   * audio: OUT2 of the engine (PCM with the F9h mix attenuation), through a FIFO
 //     read at a steady 44.1 kHz (no wow and flutter from the held CE), copied to
@@ -31,7 +32,8 @@ module opl4_wave
 #(
     parameter          CE_INC  = 24'd10584,     // 33.8688 MHz / 50 MHz = 10584 / 15625
     parameter          CE_MOD  = 24'd15625,
-    parameter          RD_MAX  = 7'd100         // longest wait of an IN 7Fh in clk_bus cycles (4.7 us)
+    parameter          RD_MAX  = 7'd100,        // longest wait of an IN 7Fh in clk_bus cycles (4.7 us)
+    parameter          LINE_RD = 0              // 1: a read of the wave memory gives 4 words (8 bytes, adr 8-aligned)
 )
 (
     input  wire        clk_bus,
@@ -53,7 +55,7 @@ module opl4_wave
     output reg         mem_we,
     output reg  [21:0] mem_adr,
     output reg   [7:0] mem_wdat,
-    input  wire [15:0] mem_rdat,
+    input  wire [63:0] mem_rdat,                // a line of 4 words with LINE_RD (word 0 in 15-0)
 
     // diagnostics of the ZEMMIX.ROM load (clk_bus), read on regs F0h-F3h and FAh-FFh
     input  wire [23:0] dbg_wr,                  // F0h-F2h: bytes written to the wave memory
@@ -112,14 +114,25 @@ wire        q_empty = (q_wp == q_rp);
 // bits of the old value
 reg   [1:0] x_cnt = 0;
 reg         x_rd = 0, x_pend = 0;
+// A read of the C4h status (A = 0) only matters to the engine to clear LD2: it is not
+// queued (nor BUSY) but kept as one pending read, played when the queue is empty.  A
+// status read in the queue made BUSY high for the poll that queued it: an R800, whose
+// IN is short, read BUSY from its own read on every poll and never left the loop
+// (RoboPlay, OPL4 reset).
+reg         st_pend = 0, st_take = 0;
 always @(posedge clk_eng) begin
     rdx_d <= rdx;
     wrx_d <= wrx;
+    if (st_take) st_pend <= 0;
     if (x_pend) begin
         if (x_cnt != 0) x_cnt <= x_cnt - 1'd1;
         else begin
-            q[q_wp] <= {x_rd, a_s, x_rd ? 8'h00 : di_s};
-            q_wp    <= q_wp + 1'd1;
+            if (x_rd && a_s == 3'd0)
+                st_pend <= 1;
+            else begin
+                q[q_wp] <= {x_rd, a_s, x_rd ? 8'h00 : di_s};
+                q_wp    <= q_wp + 1'd1;
+            end
             x_pend  <= 0;
         end
     end
@@ -137,6 +150,7 @@ wire  [7:0] eng_do;
 wire  [1:0] eng_status;
 wire        sample_ce;                          // the engine has a new sample
 reg         drv = 0;
+reg         drv_st = 0;                         // playing a C4h status read (not BUSY)
 reg   [3:0] ph = 0;
 reg         drv_rd = 0, drv_cs = 0, drv_rd_n = 1, drv_wr_n = 1;
 reg   [2:0] drv_a = 0;
@@ -144,11 +158,21 @@ reg   [7:0] drv_di = 0;
 reg         rd_done_t = 0;                      // to clk_bus, rd_q stable then
 reg   [7:0] rd_q = 8'hFF;
 always @(posedge clk_eng) begin
+    st_take <= 0;
     if (!drv) begin
         if (!q_empty && !eng_status[0]) begin
             {drv_rd, drv_a, drv_di} <= q[q_rp];
             q_rp   <= q_rp + 1'd1;
             drv    <= 1;
+            drv_st <= 0;
+            drv_cs <= 1;
+            ph     <= 0;
+        end
+        else if (q_empty && st_pend && !st_take && !eng_status[0]) begin
+            {drv_rd, drv_a, drv_di} <= {1'b1, 3'd0, 8'h00};
+            st_take <= 1;
+            drv    <= 1;
+            drv_st <= 1;
             drv_cs <= 1;
             ph     <= 0;
         end
@@ -222,17 +246,22 @@ reg  [1:0] st_s0 = 2'b00;
 reg  [1:0] qb_s = 2'b00;                        // queue busy
 reg  [7:0] idx_b = 0;                           // last index written to 7Eh
 reg        wr4_d = 0;
+// diagnostics (regs F4h-F7h of 7Eh / 7Fh): FIFO empty while playing / full (since
+// reset), counted in the audio part below
+reg  [15:0] sf_unf = 0, sf_ovf = 0;
 reg  [7:0] dbg_q;
 always @(*) begin
     case (idx_b)
         8'hF0: dbg_q = dbg_wr[7:0];    8'hF1: dbg_q = dbg_wr[15:8];   8'hF2: dbg_q = dbg_wr[23:16];
         8'hF3: dbg_q = dbg_flags;
+        8'hF4: dbg_q = sf_unf[7:0];    8'hF5: dbg_q = sf_unf[15:8];   // FIFO empty (clk_eng, slow)
+        8'hF6: dbg_q = sf_ovf[7:0];    8'hF7: dbg_q = sf_ovf[15:8];   // FIFO full
         8'hFA: dbg_q = dbg_rcv[7:0];   8'hFB: dbg_q = dbg_rcv[15:8];  8'hFC: dbg_q = dbg_rcv[23:16];
         8'hFD: dbg_q = dbg_lost[7:0];  8'hFE: dbg_q = dbg_lost[15:8]; 8'hFF: dbg_q = dbg_lost[23:16];
         default: dbg_q = 8'h00;
     endcase
 end
-wire       idx_dbg = (idx_b[7:4] == 4'hF) && (idx_b[3:2] == 2'b00 || idx_b[3:0] >= 4'hA);
+wire       idx_dbg = (idx_b[7:4] == 4'hF) && (idx_b[3:0] <= 4'h7 || idx_b[3:0] >= 4'hA);
 always @(posedge clk_bus) begin
     rdd_s  <= {rdd_s[1:0], rd_done_t};
     wr4_d  <= bus_cs && !bus_wr_n && bus_a == 3'd4;
@@ -245,7 +274,7 @@ always @(posedge clk_bus) begin
     rd_ok <= rd7f && rd7f_d && rd_cmp == rd_iss;  // one clock after bus_do took the answer
 
     st_s0 <= eng_status;
-    qb_s  <= {qb_s[0], drv | !q_empty};
+    qb_s  <= {qb_s[0], (drv & ~drv_st) | !q_empty};   // a status read is not BUSY
     bus_status <= {st_s0[1], st_s0[0] | qb_s[1]};
 
     if (rd7f) begin
@@ -260,42 +289,63 @@ wire [21:0] eng_adr  = {~eng_mcs_n[1], eng_ma};    // MCS_N[1] is low when A21 =
 wire        eng_mreq = ~eng_mrd_n | ~eng_mwr_n;
 reg         eng_mreq_d = 0;
 
-reg  [20:0] c_tag = 0;                          // one-word cache
-reg  [15:0] c_dat = 0;
-reg         c_ok = 0;
+// Line cache: CL lines, fully associative, replaced in turn.  A line is what the memory
+// gives on a read: 4 words (8 bytes) with LINE_RD (the 2nd SDRAM of the SiDi128), else
+// one word.  Each slot reads consecutive bytes, so a line serves several of its samples
+// (with one word per read the engine waited for the memory on almost every byte: with
+// more than ~12 slots playing it made fewer than 44100 samples a second, the music went
+// slower and lower).  Writes go to the memory and to the line if it is here.
+localparam CL = 32;
+function [20:0] tag_of(input [21:0] a);
+    tag_of = LINE_RD ? {a[21:3], 2'b00} : a[21:1];
+endfunction
+function [7:0] byte_of(input [63:0] l, input [2:0] off);
+    byte_of = LINE_RD ? l[{off, 3'b000} +: 8] : (off[0] ? l[15:8] : l[7:0]);
+endfunction
+reg  [20:0] lt [0:CL-1];                        // line tags
+reg  [63:0] ld [0:CL-1];                        // line data (byte k in bits 8k+7..8k)
+reg  [CL-1:0] lv = 0;                           // valid
+reg   [4:0] lrr = 0;                            // next line to replace
+reg         hit;
+reg   [4:0] hit_i;
+integer     ci;
+always @* begin
+    hit = 0; hit_i = 0;
+    for (ci = 0; ci < CL; ci = ci + 1)
+        if (lv[ci] && lt[ci] == tag_of(eng_adr)) begin hit = 1; hit_i = ci[4:0]; end
+end
+wire  [2:0] eng_off = LINE_RD ? eng_adr[2:0] : {2'b00, eng_adr[0]};
 
 reg         e_req_t = 0;                        // request toggle to clk_bus, payload below
 reg         e_we = 0;
 reg  [21:0] e_adr = 0;
+reg   [2:0] e_off = 0;                          // byte of the line asked by the engine
 reg   [7:0] e_wdat = 0;
 reg         b_done_t = 0;                       // done toggle from clk_bus (b_rdat stable then)
-reg  [15:0] b_rdat = 0;
+reg  [63:0] b_rdat = 0;
 reg   [2:0] done_s = 0;
 
 always @(posedge clk_eng) begin
     eng_mreq_d <= eng_mreq;
     done_s     <= {done_s[1:0], b_done_t};
 
-    if (!eng_rst_n) c_ok <= 0;
-
     if (pend) begin
         if (done_s[2] == e_req_t) begin         // the access is back
             pend <= 0;
             if (!e_we) begin
-                c_tag   <= e_adr[21:1];
-                c_dat   <= b_rdat;
-                c_ok    <= eng_rst_n;
-                eng_mdi <= e_adr[0] ? b_rdat[15:8] : b_rdat[7:0];
+                lt[lrr] <= tag_of(e_adr);
+                ld[lrr] <= b_rdat;
+                lv[lrr] <= eng_rst_n;
+                lrr     <= lrr + 1'd1;
+                eng_mdi <= byte_of(b_rdat, e_off);
             end
         end
     end
     else if (eng_mreq && !eng_mreq_d) begin     // a new access of the engine
         if (!eng_mwr_n) begin
             eng_mdi <= eng_mdo;                 // the engine takes MDI back on a write
-            if (eng_adr[21]) begin              // RAM: write it (and the cache), ROM: ignore it
-                if (c_ok && c_tag == eng_adr[21:1]) begin
-                    if (eng_adr[0]) c_dat[15:8] <= eng_mdo; else c_dat[7:0] <= eng_mdo;
-                end
+            if (eng_adr[21]) begin              // RAM: write it (and the line), ROM: ignore it
+                if (hit) ld[hit_i][{eng_off, 3'b000} +: 8] <= eng_mdo;
                 e_we    <= 1;
                 e_adr   <= eng_adr;
                 e_wdat  <= eng_mdo;
@@ -303,16 +353,19 @@ always @(posedge clk_eng) begin
                 pend    <= 1;
             end
         end
-        else if (c_ok && c_tag == eng_adr[21:1]) begin
-            eng_mdi <= eng_adr[0] ? c_dat[15:8] : c_dat[7:0];
+        else if (hit) begin
+            eng_mdi <= byte_of(ld[hit_i], eng_off);
         end
         else begin
             e_we    <= 0;
-            e_adr   <= eng_adr;
+            e_adr   <= LINE_RD ? {eng_adr[21:3], 3'b000} : eng_adr;
+            e_off   <= eng_off;
             e_req_t <= ~e_req_t;
             pend    <= 1;
         end
     end
+
+    if (!eng_rst_n) lv <= 0;
 end
 
 //------------------------------------------------------------------ wave memory, clk_bus side
@@ -357,6 +410,7 @@ always @(posedge clk_eng) begin
         sfifo[sf_wp] <= {out2_l, out2_r};
         sf_wp <= sf_wp + 1'd1;
     end
+    if (sample_ce_d && sf_lvl == 5'd31 && sf_ovf != 16'hFFFF) sf_ovf <= sf_ovf + 1'd1;   // sample lost
 
     if (sacc + 19'd441 >= 19'd500000) begin     // a 44.1 kHz tick
         sacc <= sacc + 19'd441 - 19'd500000;
@@ -365,6 +419,7 @@ always @(posedge clk_eng) begin
             sf_rp   <= sf_rp + 1'd1;
             hold_tg <= ~hold_tg;
         end
+        else if (sf_run && sf_unf != 16'hFFFF) sf_unf <= sf_unf + 1'd1;  // empty: the last one again
         if (sf_lvl >= 5'd16) sf_run <= 1;       // start from half full
         else if (sf_lvl == 0) sf_run <= 0;      // empty (engine stopped): fill again
     end
@@ -373,6 +428,8 @@ always @(posedge clk_eng) begin
     if (!eng_rst_n) begin
         sf_rp  <= sf_wp;
         sf_run <= 0;
+        sf_unf <= 0;
+        sf_ovf <= 0;
     end
 end
 reg  [2:0] tg_s = 0;

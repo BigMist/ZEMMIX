@@ -261,8 +261,11 @@ package YMF278B_PKG;
 		bit [21:0] SUM;
 		
 		PHASE_NEG = 7'h40 - PHASE;
-		TEMP0 = $signed(WAVE0) * PHASE_NEG;
-		TEMP1 = $signed(WAVE1) * PHASE;
+		// ZEMMIX: signed x signed (an unsigned PHASE made the products unsigned: a
+		// jump of 65536 x PHASE when the two samples have different signs, a click on
+		// every zero crossing)
+		TEMP0 = $signed(WAVE0) * $signed({1'b0, PHASE_NEG});
+		TEMP1 = $signed(WAVE1) * $signed({2'b00, PHASE});
 		SUM = $signed(TEMP0) + $signed(TEMP1);
 	
 		return SUM[21:6];
@@ -314,8 +317,8 @@ package YMF278B_PKG;
 		return TEMP;
 	endfunction
 	
-	function bit signed [15:0] TrimWave(bit signed [17:0] WAVE);
-		return WAVE[17] && WAVE[16:15] != 2'b11 ? 16'h8000 : !WAVE[17] && WAVE[16:15] != 2'b00 ? 16'h7FFF : WAVE[15:0];
+	function bit signed [15:0] TrimWave(bit signed [20:0] WAVE);	// ZEMMIX: 21-bit sum of the slots
+		return WAVE[20] && WAVE[19:15] != 5'b11111 ? 16'h8000 : !WAVE[20] && WAVE[19:15] != 5'b00000 ? 16'h7FFF : WAVE[15:0];
 	endfunction
 	
 endpackage

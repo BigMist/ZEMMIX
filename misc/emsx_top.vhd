@@ -50,13 +50,12 @@ entity emsx_top is
         use_wifi_g      : boolean   := true;
         use_midi_g      : boolean   := true;
         use_opl3_g      : boolean   := true;
-        opl3_fpga_g     : boolean   := false;                           -- OPL3: false = opl3sw (Next186), true = opl3_fpga (Greg Taylor, clk_opl = 50MHz)
-        use_opl4_g      : boolean   := false;                           -- OPL4 wave part (MoonSound: FM C4-C7h + wave 7E-7Fh), needs opl3_fpga_g and clk_opl = 50MHz
+        use_opl4_g      : boolean   := false;                           -- OPL4 wave part (MoonSound: FM C4-C7h + wave 7E-7Fh), needs clk_opl = 50MHz
         opl4_wave_ext_g : boolean   := false;                           -- OPL4 wave memory outside (2nd SDRAM), not in the top 4 MB of the SDRAM
         use_v9990_g     : boolean   := false;                           -- V9990 (GFX9000): ports 60h-6Fh, VRAM outside (2nd SDRAM)
         use_dualpsg_g   : boolean   := true;
         psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
-        opl3_clk_g      : integer   := 86000000                         -- clk_opl in Hz
+        opl3_clk_g      : integer   := 50000000                         -- clk_opl in Hz
     );
     port(
         -- Clock, Reset ports
@@ -211,7 +210,7 @@ entity emsx_top is
         wave_ext_we     : out   std_logic;
         wave_ext_adr    : out   std_logic_vector( 21 downto 0 );
         wave_ext_wdat   : out   std_logic_vector(  7 downto 0 );
-        wave_ext_rdat   : in    std_logic_vector( 15 downto 0 ) := (others => '1');
+        wave_ext_rdat   : in    std_logic_vector( 63 downto 0 ) := (others => '1');  -- reads: lines of 4 words (word 0 in 15-0)
 
         -- V9990 (use_v9990_g): ports 60h-6Fh to the host bus of v9990_core (misc/v9990_bus.vhd)
         v99_clk         : in    std_logic := '0';                               -- 42.95 MHz, same PLL as clk21m
@@ -432,6 +431,7 @@ architecture RTL of emsx_top is
             adr             : in    std_logic_vector( 15 downto 0 );
             dbi             : out   std_logic_vector(  7 downto 0 );
             dbo             : in    std_logic_vector(  7 downto 0 );
+            cyc             : in    std_logic;
 
             ramreq          : out   std_logic;
             ramadr          : out   std_logic_vector( 17 downto 0 );
@@ -722,28 +722,17 @@ architecture RTL of emsx_top is
         );
     end component;
 
-    component opl3 is
-        generic(
-            OPLCLK          : integer := 64000000                               -- opl_clk in Hz
-        );
-        port(
-            clk             : in    std_logic;
-            clk_opl         : in    std_logic;
-            rst_n           : in    std_logic;
-            irq_n           : out   std_logic;
-
-            addr            : in    std_logic_vector(  1 downto 0 );
-            dout            : out   std_logic_vector(  7 downto 0 );
-            din             : in    std_logic_vector(  7 downto 0 );
-            we              : in    std_logic;
-            mono            : in    std_logic;
-
-            sample_l        : out   std_logic_vector( 15 downto 0 );
-            sample_r        : out   std_logic_vector( 15 downto 0 )
-         );
-    end component;
+    -- OPL4 wave memory in the 2nd SDRAM: its reads are lines of 4 words (cache of opl4_wave)
+    function line_rd_f( b : boolean ) return integer is
+    begin
+        if( b )then return 1; else return 0; end if;
+    end function;
+    constant line_rd_c : integer := line_rd_f( opl4_wave_ext_g );
 
     component opl4_wave is
+        generic(
+            LINE_RD         : integer := 0                                      -- 1: a read gives a line of 4 words
+        );
         port(
             clk_bus         : in    std_logic;
             reset_bus       : in    std_logic;
@@ -760,7 +749,7 @@ architecture RTL of emsx_top is
             mem_we          : out   std_logic;
             mem_adr         : out   std_logic_vector( 21 downto 0 );
             mem_wdat        : out   std_logic_vector(  7 downto 0 );
-            mem_rdat        : in    std_logic_vector( 15 downto 0 );
+            mem_rdat        : in    std_logic_vector( 63 downto 0 );
             pcm_l           : out   std_logic_vector( 15 downto 0 );
             pcm_r           : out   std_logic_vector( 15 downto 0 );
             dbg_wr          : in    std_logic_vector( 23 downto 0 );
@@ -1040,6 +1029,8 @@ architecture RTL of emsx_top is
 
     -- Kanji signals
     signal  KanReq          : std_logic;
+    signal  kan_cyc         : std_logic;                                            -- I/O cycle on D8-DBh (misc/kanji.vhd)
+    signal  kan_rd          : std_logic;                                            -- a read of D9h / DBh: the font byte from the SDRAM
     signal  KanDbi          : std_logic_vector(  7 downto 0 );
     signal  KanRom          : std_logic;
     signal  KanAdr          : std_logic_vector( 17 downto 0 );
@@ -1132,7 +1123,7 @@ architecture RTL of emsx_top is
     signal  wave_we         : std_logic := '0';
     signal  wave_adr        : std_logic_vector( 21 downto 0 ) := (others => '0');
     signal  wave_wdat       : std_logic_vector(  7 downto 0 ) := (others => '0');
-    signal  wave_rdat       : std_logic_vector( 15 downto 0 ) := (others => '1');
+    signal  wave_rdat       : std_logic_vector( 63 downto 0 ) := (others => '1');
     signal  wave_sdr_adr    : std_logic_vector( 24 downto 0 );
     signal  wave_pend       : std_logic;
     signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
@@ -1147,7 +1138,7 @@ architecture RTL of emsx_top is
     signal  wt_we           : std_logic := '0';
     signal  wt_adr          : std_logic_vector( 21 downto 0 ) := (others => '0');
     signal  wt_wdat         : std_logic_vector(  7 downto 0 ) := (others => '0');
-    signal  wt_rdat         : std_logic_vector( 15 downto 0 );
+    signal  wt_rdat         : std_logic_vector( 63 downto 0 );
     signal  romload_rcv     : std_logic_vector( 23 downto 0 );
     signal  romload_lost    : std_logic_vector( 23 downto 0 );
     signal  romload_wr      : std_logic_vector( 21 downto 0 );
@@ -1204,6 +1195,7 @@ architecture RTL of emsx_top is
 
     -- Sound output, toggle keys
     signal  vFKeys          : std_logic_vector(  7 downto 0 );
+    signal  FKeys_sw        : std_logic_vector(  7 downto 0 );                       -- Fkeys for swioports, without F12
     signal  ff_Scro         : std_logic;
     signal  ff_Reso         : std_logic;
 
@@ -2085,6 +2077,8 @@ begin
                 end if;
             elsif( mem = '1' and ((iSltMap0 or iSltMap or rom_main or rom_opll or rom_extd or rom_xbas or rom_free or iSltLin1 or iSltLin2) = '1') )then
                 jSltMem <= '1';
+            elsif( mem = '0' and adr(7 downto 2) = "110110" and adr(0) = '1' )then  -- Kanji-data D9h / DBh: the byte read now (ZEMMIX-cb8)
+                jSltMem <= '1';
             else
                 jSltMem <= '0';
             end if;
@@ -2139,17 +2133,10 @@ begin
     -- slot has read/written this very address, or the request of this
     -- bus cycle has been acked (+3 clocks for registered device data).
     ----------------------------------------------------------------
-    U01_R8 : entity work.T80s
-        generic map(
-            Mode        => 0,
-            T2Write     => 1,
-            IOWait      => 1,
-            MulDlyB     => 34,                  -- MULUB = 14 R800 cycles at 21.48MHz
-            MulDlyW     => 107                  -- MULUW = 36 R800 cycles at 21.48MHz
-        )
+    -- the R800 core (R800 submodule, derived from NextZ80) on a T80s like bus
+    U01_R8 : entity work.r800_bus
         port map(
             RESET_n     => (not reset),
-            R800_mode   => '1',
             CLK         => clk21m,
             CEN         => r8_cen,
             WAIT_n      => r8_wait_n,
@@ -2224,7 +2211,7 @@ begin
             iorq_n      => r8_iorq_n,
             rd_n        => r8_rd_n,
             wr_n        => r8_wr_n,
-            rfsh_n      => r8_rfsh_n,
+            rfsh_n      => '1',                 -- r8_rfsh_n only asks the SDRAM refresh
             wait_n      => r8_wait_n,
             adr         => r8_adr,
             di          => r8_dbi,
@@ -2307,6 +2294,7 @@ begin
                 '0' when( (rc_io = '1' or (rc_rd = '1' and (jSltMem = '0' or jSltScc1 = '1' or jSltScc2 = '1'))) and rc_cnt < "011" )else
                 '0' when( rc_io = '1' and opl4_wait_n = '0' )else                     -- OPL4: IN 7Fh until its data is there
                 '0' when( rc_io = '1' and v99_wait_n = '0' )else                      -- V9990: until it has taken / given the byte
+                '0' when( kan_rd = '1' and not (sdr_rd_ok = '1' and sdr_rd_adr = CpuAdr) )else  -- Kanji font: until the SDRAM read of the pointer
                 '1';
 
     -- a device that ends its wait on edge W gives its data in dlydbi on edge W+1: the R800
@@ -2725,6 +2713,12 @@ begin
         end if;
     end process;
 
+    -- F12 opens the OSD of the MiST / SiDi: its press can reach the core, and in
+    -- swioports F12 steps the CPU speed (3.58 > 5.37 > custom > 3.58) and
+    -- SHIFT+F12 the slot 1, so every OSD opening changed the speed.  swioports
+    -- does not see F12 (the speed is in the OSD); LCTRL+F12 resets still work.
+    FKeys_sw <= Fkeys(7 downto 1) & vFkeys(0);
+
 
     -- Cassette Magnetic Tape (CMT) interface
     CmtIn   <= null                                         when( power_on_reset = '0' )else
@@ -2939,7 +2933,7 @@ begin
                     -- the access is done when its data is on the bus (read) or written,
                     -- only in a real cpu slot (else it is tried again)
                     if( wave_we = '0' )then
-                        wave_rdat <= pMemDat;
+                        wave_rdat <= X"000000000000" & pMemDat;
                     end if;
                     wave_done_t <= wave_req_t;
                     wave_wait   <= "00";
@@ -3231,7 +3225,8 @@ begin
         elsif( clk21m'event and clk21m = '1' )then
             if( RamReq = '0' )then
                 RamAck <= '0';
-            elsif( VideoDLClk = '0' and VideoDHClk = '1' and wave_slot = '0' )then     -- not in an OPL4 wave slot
+            elsif( VideoDLClk = '0' and VideoDHClk = '1' and wave_slot = '0' and      -- not in an OPL4 wave slot
+                   SdrSta /= "010" )then                                    -- nor in a refresh (R800: any time)
                 RamAck <= '1';
             end if;
             if( VideoDLClk = '0' )then
@@ -3393,8 +3388,10 @@ begin
         port map(clk21m, '0', rtcena, RtcReq, open, wrt, adr, RtcDbi, dbo);
 
     U08 : kanji
-        port map(clk21m, reset, KanReq, open, wrt, adr, KanDbi, dbo,
+        port map(clk21m, reset, KanReq, open, wrt, adr, KanDbi, dbo, kan_cyc,
                         KanRom, KanAdr, RamDbi, open);
+    kan_cyc <= '1' when( iSltIorq_n = '0' and adr(7 downto 2) = "110110" )else '0';
+    kan_rd  <= '1' when( rc_io = '1' and mem = '0' and adr(7 downto 2) = "110110" and adr(0) = '1' and wrt = '0' )else '0';
 
     U20 : vdp
         -- V9938 VDP core
@@ -3441,8 +3438,9 @@ begin
 
     U32 : eseopll
         port map(clk21m, reset, clkena, OpllEnaWait, OpllReq, OpllAck, wrt, adr, dbo, OpllWav);
-    -- OPLL wait enabler
-    OpllEnaWait <= ff_clksel xnor ff_clksel5m_n;
+    -- OPLL wait enabler: the turbo Z80 clocks and the R800 (the 3.58MHz Z80
+    -- software waits by itself)
+    OpllEnaWait <= (ff_clksel xnor ff_clksel5m_n) or r8_owner;
 
 
 
@@ -3561,7 +3559,7 @@ begin
             ff_Scro         => ff_Scro          ,
             Reso            => Reso             ,
             ff_Reso         => ff_Reso          ,
-            FKeys           => FKeys            ,
+            FKeys           => FKeys_sw         ,
             vFKeys          => vFKeys           ,
             LevCtrl         => LevCtrl          ,
             GreenLvEna      => GreenLvEna       ,
@@ -3589,6 +3587,9 @@ begin
 
     opl4_u : if use_opl4_g generate
         u_opl4 : opl4_wave
+            generic map(
+                LINE_RD     => line_rd_c
+            )
             port map(
                 clk_bus     => clk21m,
                 reset_bus   => reset,
@@ -3741,29 +3742,7 @@ begin
             );
     end generate;
 
-    opl3_u : if use_opl3_g and not opl3_fpga_g generate
-        opl3_1 : opl3
-        generic map(
-            OPLCLK              => opl3_clk_g           -- opl_clk in Hz
-        )
-        port map(
-            clk                 => clk21m,
-            clk_opl             => clk_opl,             -- CLOCK_50 or memclk
-            rst_n               => (not reset),
-            irq_n               => opl3_Int_n,
-
-            addr                => adr(1 downto 0),     -- OPL and OPL2 uses adr(0) only
-            dout                => opl3_dout_s,
-            din                 => dbo,
-            we                  => opl3_ce,
-            mono                => '0',
-
-            sample_l            => opl3_l,
-            sample_r            => opl3_r
-        );
-    end generate;
-
-    opl3fpga_u : if use_opl3_g and opl3_fpga_g generate
+    opl3fpga_u : if use_opl3_g generate
         opl3fpga_1 : opl3fpga_msx
         generic map(
             OPLCLK              => opl3_clk_g           -- must be 50MHz (CLOCK_50)
