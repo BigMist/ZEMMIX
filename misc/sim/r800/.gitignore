@@ -1,0 +1,6 @@
+obj*/
+*.log
+*.COM
+!ZEXDOC.COM
+!ZEXALL.COM
+cpm.bin

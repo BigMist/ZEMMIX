@@ -2145,17 +2145,10 @@ begin
     -- slot has read/written this very address, or the request of this
     -- bus cycle has been acked (+3 clocks for registered device data).
     ----------------------------------------------------------------
-    U01_R8 : entity work.T80s
-        generic map(
-            Mode        => 0,
-            T2Write     => 1,
-            IOWait      => 1,
-            MulDlyB     => 34,                  -- MULUB = 14 R800 cycles at 21.48MHz
-            MulDlyW     => 107                  -- MULUW = 36 R800 cycles at 21.48MHz
-        )
+    -- the R800 core (misc/r800, derived from NextZ80) on a T80s like bus
+    U01_R8 : entity work.r800_bus
         port map(
             RESET_n     => (not reset),
-            R800_mode   => '1',
             CLK         => clk21m,
             CEN         => r8_cen,
             WAIT_n      => r8_wait_n,
@@ -2230,7 +2223,7 @@ begin
             iorq_n      => r8_iorq_n,
             rd_n        => r8_rd_n,
             wr_n        => r8_wr_n,
-            rfsh_n      => r8_rfsh_n,
+            rfsh_n      => '1',                 -- r8_rfsh_n only asks the SDRAM refresh
             wait_n      => r8_wait_n,
             adr         => r8_adr,
             di          => r8_dbi,
@@ -3244,7 +3237,8 @@ begin
         elsif( clk21m'event and clk21m = '1' )then
             if( RamReq = '0' )then
                 RamAck <= '0';
-            elsif( VideoDLClk = '0' and VideoDHClk = '1' and wave_slot = '0' )then     -- not in an OPL4 wave slot
+            elsif( VideoDLClk = '0' and VideoDHClk = '1' and wave_slot = '0' and      -- not in an OPL4 wave slot
+                   SdrSta /= "010" )then                                    -- nor in a refresh (R800: any time)
                 RamAck <= '1';
             end if;
             if( VideoDLClk = '0' )then

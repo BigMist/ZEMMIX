@@ -1,0 +1,8 @@
+pylib/
+work/
+prog_pkg.vhd
+*.log
+__pycache__/
+nzsim/
+tb_dnq.vhd
+tb_dn_probe.vhd

@@ -265,7 +265,9 @@ begin
                     else
                         ff_pfx <= "11";
                     end if;
-                elsif( m1_n = '1' )then
+                elsif( m1_n = '1' or w_mem_rd = '1' )then
+                    -- armed again once this M1 reads (its T2): back to back M1 cycles
+                    -- with M1_n low all along (the R800 core of misc/r800) count too
                     ff_bnd_done <= '0';
                 end if;
 
