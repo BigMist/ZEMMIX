@@ -55,7 +55,12 @@
 //
 //-----------------------------------------------------------------------------
 
-module vdp_cpu_interface (
+module vdp_cpu_interface #(
+	//	ZEMMIX (ZEMMIX-f7c.8): 0 = the VRAM has 128 KB, the V9968 extensions do not
+	//	turn on the 256 KB mode (no A17 from R#14, 17-bit pointer, commands up to
+	//	1024 lines), so the upper 128 KB do not alias over the lower ones
+	parameter			VRAM_256K = 1
+) (
 	input				reset_n,
 	input				clk,					//	42.95454MHz
 
@@ -476,7 +481,7 @@ module vdp_cpu_interface (
 			else if( (ff_screen_mode[4:3] == 2'b00) || !ff_vram_type ) begin
 				ff_vram_address[13:0]	<= w_next_vram_address[13:0];
 			end
-			else if( !ff_v9958_mode ) begin
+			else if( !ff_v9958_mode && VRAM_256K != 0 ) begin
 				ff_vram_address			<= w_next_vram_address;
 			end
 			else begin
@@ -488,7 +493,7 @@ module vdp_cpu_interface (
 			if( !ff_vram_type ) begin
 				ff_vram_address[17:14]	<= 4'd0;
 			end
-			else if( !ff_v9958_mode ) begin
+			else if( !ff_v9958_mode && VRAM_256K != 0 ) begin
 				ff_vram_address[17:14]	<= ff_1st_byte[3:0];
 			end
 			else begin
@@ -1001,7 +1006,7 @@ module vdp_cpu_interface (
 	assign reg_sprite_mode3							= ff_sprite_mode3;
 	assign reg_ext_palette_mode						= ff_ext_palette_mode;
 	assign reg_ext_command_mode						= ~ff_v9958_mode;
-	assign reg_vram256k_mode						= ~ff_v9958_mode;
+	assign reg_vram256k_mode						= ~ff_v9958_mode & (VRAM_256K != 0);
 	assign reg_sprite16_mode						= ff_sprite16_mode;
 	assign reg_flat_interlace_mode					= ff_flat_interlace_mode;
 endmodule

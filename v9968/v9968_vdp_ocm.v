@@ -302,7 +302,9 @@ module vdp #(
 		ff_vmode_s	<= { ff_vmode_s[2], ntsc_pal_type, ff_vmode_s[0], forced_v_mode };
 	end
 
-	v9968_core u_v9968 (
+	v9968_core #(
+		.VRAM_256K				( VRAM_256K				)
+	) u_v9968 (
 		.reset_n				( reset_n				),
 		.clk					( clk					),
 		.initial_busy			( w_initial_busy		),

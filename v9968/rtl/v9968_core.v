@@ -57,7 +57,9 @@
 //
 //-----------------------------------------------------------------------------
 
-module v9968_core (
+module v9968_core #(
+	parameter			VRAM_256K = 1			//	ZEMMIX: 0 = 128 KB VRAM (no 256 KB mode)
+) (
 	input				reset_n,
 	input				clk,					//	85.90908MHz
 
@@ -261,7 +263,9 @@ module v9968_core (
 	// --------------------------------------------------------------------
 	//	CPU Interface
 	// --------------------------------------------------------------------
-	vdp_cpu_interface u_cpu_interface (
+	vdp_cpu_interface #(
+		.VRAM_256K									( VRAM_256K									)
+	) u_cpu_interface (
 		.reset_n									( reset_n									),
 		.clk										( clk										),
 		.bus_address								( bus_address								),
