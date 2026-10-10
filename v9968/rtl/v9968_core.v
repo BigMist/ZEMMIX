@@ -470,7 +470,13 @@ module v9968_core (
 		.reg_ext_command_mode						( reg_ext_command_mode						),
 		.reg_vram256k_mode							( reg_vram256k_mode							),
 		.vram_access_mask							( w_vram_access_mask						),
-		.intr_command_end							( w_intr_command_end						)
+		.intr_command_end							( w_intr_command_end						),
+		.h_count									( w_h_count									),
+		.v_count									( w_v_count									),
+		.screen_pos_y								( w_screen_pos_y							),
+		.reg_display_on								( reg_display_on							),
+		.reg_212lines_mode							( reg_212lines_mode							),
+		.reg_sprite_disable							( reg_sprite_disable						)
 	);
 
 	// --------------------------------------------------------------------

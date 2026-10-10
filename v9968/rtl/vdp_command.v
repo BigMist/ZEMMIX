@@ -54,7 +54,11 @@
 //
 //-----------------------------------------------------------------------------
 
-module vdp_command (
+module vdp_command #(
+	//	1: the steps follow the V9938 command timing of openMSX (VDPAccessSlots),
+	//	0: the former fixed wait per step (c_wait_*).
+	parameter			CMD_TIMING_OPENMSX = 1
+) (
 	input				reset_n,
 	input				clk,
 	//	Shared cache interface
@@ -87,7 +91,14 @@ module vdp_command (
 	input				reg_ext_command_mode,
 	input				reg_vram256k_mode,
 	output				vram_access_mask,
-	output				intr_command_end
+	output				intr_command_end,
+	//	V9938 access slot timing
+	input		[11:0]	h_count,
+	input		[9:0]	v_count,
+	input		[9:0]	screen_pos_y,
+	input				reg_display_on,
+	input				reg_212lines_mode,
+	input				reg_sprite_disable
 );
 	localparam	c_hmmc		= 4'b1111;
 	localparam	c_ymmm		= 4'b1110;
@@ -1106,6 +1117,467 @@ module vdp_command (
 	end
 
 	// --------------------------------------------------------------------
+	//	Access slot timing (ZEMMIX-f7c.3)
+	//
+	//	The steps of the commands follow the V9938 timing of openMSX
+	//	(VDPCmdEngine, VDPAccessSlots): a step is a sequence of V9938 VRAM
+	//	accesses, and each access happens at the first command access slot
+	//	of the line that is at least 'delta' V9938 cycles (21.48 MHz, 1368
+	//	per line) after the previous one.  The engine itself accesses VRAM
+	//	through the word cache, so its accesses are not timed one by one:
+	//	this sequencer walks the V9938 accesses of each step (the start
+	//	delay, the deltas inside the step and the delta to the next step,
+	//	longer at the end of a line) and lets the engine do a whole step at
+	//	the time of the step's first access.  The command ends (CE = 0) at
+	//	the time of its last access.
+	//
+	//	Slot tables (openMSX slotsScreenOff / slotsSpritesOff /
+	//	slotsSpritesOn): screen off (R#1 BL = 0, or a border line) 154
+	//	slots per line, sprites off (R#8 SPD = 1) 88, sprites on 31.  Like
+	//	openMSX the step deltas get one more cycle with sprites on; the
+	//	padded memory cycles in the horizontal blanking (openMSX 'pad', a
+	//	few cycles per line) are left out.
+	//
+	//	Deltas (openMSX VDPCmdEngine):
+	//		HMMV	W, next 46 (end of line 104)
+	//		HMMM	R +24 W, next 60 (128)
+	//		YMMM	R +24 W, next 36 (104)
+	//		LMMV	R +24 W, next 72 (130)
+	//		LMMM	R +32 R +24 W, next 60 (128)
+	//		LINE	R +24 W, next 84 (120 when the minor axis steps)
+	//		SRCH	R, next 88
+	//		PSET	R +24 W;  POINT R
+	//		HMMC, LMMC, LMCM: at the next slot once the CPU has transferred
+	//	Start delay from the R#46 write to the first access: POINT 63,
+	//	LMMM 64, LMCM 76, LMMV/LMMC/PSET/SRCH 88, HMMM/YMMM 100,
+	//	HMMV/LINE/HMMC 112.
+	//
+	//	Line position: openMSX cycle 0 is the start of the horizontal sync,
+	//	the display starts at cycle 258 (R#18 = 0).  The V9968 line is
+	//	h_count 0-2735 of the even v_count plus 0-2735 of the odd one (4
+	//	clk per V9938 cycle), its display (screen_pos_x = 0) starts at
+	//	1/4 of 640 = 160, so openMSX cycle = V9968 cycle + 98.
+	//
+	//	reg_command_high_speed_mode (OCM VdpSpeedMode): no slots, as fast as
+	//	the engine goes.
+	// --------------------------------------------------------------------
+	localparam			c_cycle_offset		= 11'd98;
+	localparam			c_seq_idle			= 2'd0;
+	localparam			c_seq_first			= 2'd1;		//	start delay to the first access
+	localparam			c_seq_internal		= 2'd2;		//	accesses inside the step
+	localparam			c_seq_next			= 2'd3;		//	delta to the next step
+
+	wire				w_slot_timing;
+	wire				w_seq_on;
+	wire				w_seq_hold;
+	wire				w_step_state;
+	wire		[12:0]	w_half_count;
+	wire		[11:0]	w_cycle_sum;
+	wire				w_display_slots;
+	wire				w_sprite_slots;
+	wire				w_slot;
+	wire		[8:0]	w_since;
+	wire		[1:0]	w_internal_count;
+	reg			[7:0]	w_start_delta;
+	reg			[7:0]	w_internal_delta;
+	reg			[7:0]	w_next_delta;
+	wire		[8:0]	w_delta;
+	wire				w_engine_ready;
+	reg			[12:0]	ff_half_count;
+	reg			[10:0]	ff_cycle;
+	reg					ff_cycle_tick;
+	reg			[2:0]	ff_slot_rom;
+	reg					ff_slot_tick;
+	reg					ff_display_slots;
+	reg					ff_sprite_slots;
+	reg			[1:0]	ff_seq_state;
+	reg			[1:0]	ff_seq_phase;
+	reg			[7:0]	ff_seq_since;
+	reg					ff_seq_grant;
+	reg					ff_seq_eol;
+
+	assign w_slot_timing	= (CMD_TIMING_OPENMSX != 0);
+	assign w_seq_on			= w_slot_timing && !reg_command_high_speed_mode;
+
+	//	V9938 cycle of the line, as openMSX counts it
+	assign w_half_count		= v_count[0] ? ( { 1'b0, h_count } + 13'd2736 ): { 1'b0, h_count };
+	assign w_cycle_sum		= { 1'b0, ff_half_count[12:2] } + { 1'b0, c_cycle_offset };
+
+	always @( posedge clk ) begin
+		ff_half_count	<= w_half_count;
+		ff_cycle		<= (w_cycle_sum >= 12'd1368) ? (w_cycle_sum[10:0] - 11'd1368): w_cycle_sum[10:0];
+		ff_cycle_tick	<= (ff_half_count[1:0] == 2'd0);
+		ff_slot_tick	<= ff_cycle_tick;
+	end
+
+	//	Display slots: display on, from the line before the first display line
+	//	(openMSX switches to the display tables there) to the last one.
+	assign w_display_slots	= reg_display_on && ((screen_pos_y == 10'h3FF) ||
+							  (screen_pos_y < (reg_212lines_mode ? 10'd212: 10'd192)));
+	assign w_sprite_slots	= !reg_sprite_disable;
+
+	always @( posedge clk ) begin
+		ff_display_slots	<= w_display_slots;
+		ff_sprite_slots		<= w_sprite_slots;
+	end
+
+	//	Slot ROM: [2] sprites on, [1] sprites off, [0] screen off
+	always @( posedge clk ) begin
+		case( ff_cycle )
+		11'd0:	ff_slot_rom <= 3'b001;
+		11'd6:	ff_slot_rom <= 3'b010;
+		11'd8:	ff_slot_rom <= 3'b001;
+		11'd14:	ff_slot_rom <= 3'b010;
+		11'd16:	ff_slot_rom <= 3'b001;
+		11'd22:	ff_slot_rom <= 3'b010;
+		11'd24:	ff_slot_rom <= 3'b001;
+		11'd28:	ff_slot_rom <= 3'b100;
+		11'd30:	ff_slot_rom <= 3'b010;
+		11'd32:	ff_slot_rom <= 3'b001;
+		11'd38:	ff_slot_rom <= 3'b010;
+		11'd40:	ff_slot_rom <= 3'b001;
+		11'd46:	ff_slot_rom <= 3'b010;
+		11'd48:	ff_slot_rom <= 3'b001;
+		11'd54:	ff_slot_rom <= 3'b010;
+		11'd56:	ff_slot_rom <= 3'b001;
+		11'd62:	ff_slot_rom <= 3'b010;
+		11'd64:	ff_slot_rom <= 3'b001;
+		11'd70:	ff_slot_rom <= 3'b010;
+		11'd72:	ff_slot_rom <= 3'b001;
+		11'd78:	ff_slot_rom <= 3'b010;
+		11'd80:	ff_slot_rom <= 3'b001;
+		11'd86:	ff_slot_rom <= 3'b010;
+		11'd88:	ff_slot_rom <= 3'b001;
+		11'd92:	ff_slot_rom <= 3'b100;
+		11'd94:	ff_slot_rom <= 3'b010;
+		11'd96:	ff_slot_rom <= 3'b001;
+		11'd102:	ff_slot_rom <= 3'b010;
+		11'd104:	ff_slot_rom <= 3'b001;
+		11'd110:	ff_slot_rom <= 3'b010;
+		11'd112:	ff_slot_rom <= 3'b001;
+		11'd118:	ff_slot_rom <= 3'b010;
+		11'd120:	ff_slot_rom <= 3'b001;
+		11'd162:	ff_slot_rom <= 3'b110;
+		11'd164:	ff_slot_rom <= 3'b001;
+		11'd170:	ff_slot_rom <= 3'b110;
+		11'd172:	ff_slot_rom <= 3'b001;
+		11'd180:	ff_slot_rom <= 3'b001;
+		11'd182:	ff_slot_rom <= 3'b010;
+		11'd188:	ff_slot_rom <= 3'b111;
+		11'd196:	ff_slot_rom <= 3'b001;
+		11'd204:	ff_slot_rom <= 3'b001;
+		11'd212:	ff_slot_rom <= 3'b001;
+		11'd214:	ff_slot_rom <= 3'b010;
+		11'd220:	ff_slot_rom <= 3'b111;
+		11'd228:	ff_slot_rom <= 3'b001;
+		11'd236:	ff_slot_rom <= 3'b001;
+		11'd244:	ff_slot_rom <= 3'b001;
+		11'd246:	ff_slot_rom <= 3'b010;
+		11'd252:	ff_slot_rom <= 3'b111;
+		11'd260:	ff_slot_rom <= 3'b001;
+		11'd268:	ff_slot_rom <= 3'b001;
+		11'd276:	ff_slot_rom <= 3'b001;
+		11'd278:	ff_slot_rom <= 3'b010;
+		11'd292:	ff_slot_rom <= 3'b001;
+		11'd300:	ff_slot_rom <= 3'b001;
+		11'd308:	ff_slot_rom <= 3'b001;
+		11'd310:	ff_slot_rom <= 3'b010;
+		11'd316:	ff_slot_rom <= 3'b111;
+		11'd324:	ff_slot_rom <= 3'b001;
+		11'd332:	ff_slot_rom <= 3'b001;
+		11'd340:	ff_slot_rom <= 3'b001;
+		11'd342:	ff_slot_rom <= 3'b010;
+		11'd348:	ff_slot_rom <= 3'b111;
+		11'd356:	ff_slot_rom <= 3'b001;
+		11'd364:	ff_slot_rom <= 3'b001;
+		11'd372:	ff_slot_rom <= 3'b001;
+		11'd374:	ff_slot_rom <= 3'b010;
+		11'd380:	ff_slot_rom <= 3'b111;
+		11'd388:	ff_slot_rom <= 3'b001;
+		11'd396:	ff_slot_rom <= 3'b001;
+		11'd404:	ff_slot_rom <= 3'b001;
+		11'd406:	ff_slot_rom <= 3'b010;
+		11'd420:	ff_slot_rom <= 3'b001;
+		11'd428:	ff_slot_rom <= 3'b001;
+		11'd436:	ff_slot_rom <= 3'b001;
+		11'd438:	ff_slot_rom <= 3'b010;
+		11'd444:	ff_slot_rom <= 3'b111;
+		11'd452:	ff_slot_rom <= 3'b001;
+		11'd460:	ff_slot_rom <= 3'b001;
+		11'd468:	ff_slot_rom <= 3'b001;
+		11'd470:	ff_slot_rom <= 3'b010;
+		11'd476:	ff_slot_rom <= 3'b111;
+		11'd484:	ff_slot_rom <= 3'b001;
+		11'd492:	ff_slot_rom <= 3'b001;
+		11'd500:	ff_slot_rom <= 3'b001;
+		11'd502:	ff_slot_rom <= 3'b010;
+		11'd508:	ff_slot_rom <= 3'b111;
+		11'd516:	ff_slot_rom <= 3'b001;
+		11'd524:	ff_slot_rom <= 3'b001;
+		11'd532:	ff_slot_rom <= 3'b001;
+		11'd534:	ff_slot_rom <= 3'b010;
+		11'd548:	ff_slot_rom <= 3'b001;
+		11'd556:	ff_slot_rom <= 3'b001;
+		11'd564:	ff_slot_rom <= 3'b001;
+		11'd566:	ff_slot_rom <= 3'b010;
+		11'd572:	ff_slot_rom <= 3'b111;
+		11'd580:	ff_slot_rom <= 3'b001;
+		11'd588:	ff_slot_rom <= 3'b001;
+		11'd596:	ff_slot_rom <= 3'b001;
+		11'd598:	ff_slot_rom <= 3'b010;
+		11'd604:	ff_slot_rom <= 3'b111;
+		11'd612:	ff_slot_rom <= 3'b001;
+		11'd620:	ff_slot_rom <= 3'b001;
+		11'd628:	ff_slot_rom <= 3'b001;
+		11'd630:	ff_slot_rom <= 3'b010;
+		11'd636:	ff_slot_rom <= 3'b111;
+		11'd644:	ff_slot_rom <= 3'b001;
+		11'd652:	ff_slot_rom <= 3'b001;
+		11'd660:	ff_slot_rom <= 3'b001;
+		11'd662:	ff_slot_rom <= 3'b010;
+		11'd676:	ff_slot_rom <= 3'b001;
+		11'd684:	ff_slot_rom <= 3'b001;
+		11'd692:	ff_slot_rom <= 3'b001;
+		11'd694:	ff_slot_rom <= 3'b010;
+		11'd700:	ff_slot_rom <= 3'b111;
+		11'd708:	ff_slot_rom <= 3'b001;
+		11'd716:	ff_slot_rom <= 3'b001;
+		11'd724:	ff_slot_rom <= 3'b001;
+		11'd726:	ff_slot_rom <= 3'b010;
+		11'd732:	ff_slot_rom <= 3'b111;
+		11'd740:	ff_slot_rom <= 3'b001;
+		11'd748:	ff_slot_rom <= 3'b001;
+		11'd756:	ff_slot_rom <= 3'b001;
+		11'd758:	ff_slot_rom <= 3'b010;
+		11'd764:	ff_slot_rom <= 3'b111;
+		11'd772:	ff_slot_rom <= 3'b001;
+		11'd780:	ff_slot_rom <= 3'b001;
+		11'd788:	ff_slot_rom <= 3'b001;
+		11'd790:	ff_slot_rom <= 3'b010;
+		11'd804:	ff_slot_rom <= 3'b001;
+		11'd812:	ff_slot_rom <= 3'b001;
+		11'd820:	ff_slot_rom <= 3'b001;
+		11'd822:	ff_slot_rom <= 3'b010;
+		11'd828:	ff_slot_rom <= 3'b111;
+		11'd836:	ff_slot_rom <= 3'b001;
+		11'd844:	ff_slot_rom <= 3'b001;
+		11'd852:	ff_slot_rom <= 3'b001;
+		11'd854:	ff_slot_rom <= 3'b010;
+		11'd860:	ff_slot_rom <= 3'b111;
+		11'd868:	ff_slot_rom <= 3'b001;
+		11'd876:	ff_slot_rom <= 3'b001;
+		11'd884:	ff_slot_rom <= 3'b001;
+		11'd886:	ff_slot_rom <= 3'b010;
+		11'd892:	ff_slot_rom <= 3'b111;
+		11'd900:	ff_slot_rom <= 3'b001;
+		11'd908:	ff_slot_rom <= 3'b001;
+		11'd916:	ff_slot_rom <= 3'b001;
+		11'd918:	ff_slot_rom <= 3'b010;
+		11'd932:	ff_slot_rom <= 3'b001;
+		11'd940:	ff_slot_rom <= 3'b001;
+		11'd948:	ff_slot_rom <= 3'b001;
+		11'd950:	ff_slot_rom <= 3'b010;
+		11'd956:	ff_slot_rom <= 3'b111;
+		11'd964:	ff_slot_rom <= 3'b001;
+		11'd972:	ff_slot_rom <= 3'b001;
+		11'd980:	ff_slot_rom <= 3'b001;
+		11'd982:	ff_slot_rom <= 3'b010;
+		11'd988:	ff_slot_rom <= 3'b111;
+		11'd996:	ff_slot_rom <= 3'b001;
+		11'd1004:	ff_slot_rom <= 3'b001;
+		11'd1012:	ff_slot_rom <= 3'b001;
+		11'd1014:	ff_slot_rom <= 3'b010;
+		11'd1020:	ff_slot_rom <= 3'b111;
+		11'd1028:	ff_slot_rom <= 3'b001;
+		11'd1036:	ff_slot_rom <= 3'b001;
+		11'd1044:	ff_slot_rom <= 3'b001;
+		11'd1046:	ff_slot_rom <= 3'b010;
+		11'd1060:	ff_slot_rom <= 3'b001;
+		11'd1068:	ff_slot_rom <= 3'b001;
+		11'd1076:	ff_slot_rom <= 3'b001;
+		11'd1078:	ff_slot_rom <= 3'b010;
+		11'd1084:	ff_slot_rom <= 3'b111;
+		11'd1092:	ff_slot_rom <= 3'b001;
+		11'd1100:	ff_slot_rom <= 3'b001;
+		11'd1108:	ff_slot_rom <= 3'b001;
+		11'd1110:	ff_slot_rom <= 3'b010;
+		11'd1116:	ff_slot_rom <= 3'b111;
+		11'd1124:	ff_slot_rom <= 3'b001;
+		11'd1132:	ff_slot_rom <= 3'b001;
+		11'd1140:	ff_slot_rom <= 3'b001;
+		11'd1142:	ff_slot_rom <= 3'b010;
+		11'd1148:	ff_slot_rom <= 3'b111;
+		11'd1156:	ff_slot_rom <= 3'b001;
+		11'd1164:	ff_slot_rom <= 3'b001;
+		11'd1172:	ff_slot_rom <= 3'b001;
+		11'd1174:	ff_slot_rom <= 3'b010;
+		11'd1188:	ff_slot_rom <= 3'b001;
+		11'd1196:	ff_slot_rom <= 3'b001;
+		11'd1204:	ff_slot_rom <= 3'b001;
+		11'd1206:	ff_slot_rom <= 3'b010;
+		11'd1212:	ff_slot_rom <= 3'b111;
+		11'd1220:	ff_slot_rom <= 3'b001;
+		11'd1228:	ff_slot_rom <= 3'b001;
+		11'd1264:	ff_slot_rom <= 3'b100;
+		11'd1266:	ff_slot_rom <= 3'b010;
+		11'd1268:	ff_slot_rom <= 3'b001;
+		11'd1274:	ff_slot_rom <= 3'b010;
+		11'd1276:	ff_slot_rom <= 3'b001;
+		11'd1282:	ff_slot_rom <= 3'b010;
+		11'd1284:	ff_slot_rom <= 3'b001;
+		11'd1290:	ff_slot_rom <= 3'b010;
+		11'd1292:	ff_slot_rom <= 3'b001;
+		11'd1298:	ff_slot_rom <= 3'b010;
+		11'd1300:	ff_slot_rom <= 3'b001;
+		11'd1306:	ff_slot_rom <= 3'b010;
+		11'd1308:	ff_slot_rom <= 3'b001;
+		11'd1314:	ff_slot_rom <= 3'b010;
+		11'd1316:	ff_slot_rom <= 3'b001;
+		11'd1322:	ff_slot_rom <= 3'b010;
+		11'd1324:	ff_slot_rom <= 3'b001;
+		11'd1330:	ff_slot_rom <= 3'b100;
+		11'd1332:	ff_slot_rom <= 3'b010;
+		11'd1334:	ff_slot_rom <= 3'b001;
+		11'd1342:	ff_slot_rom <= 3'b010;
+		11'd1344:	ff_slot_rom <= 3'b001;
+		11'd1350:	ff_slot_rom <= 3'b010;
+		11'd1352:	ff_slot_rom <= 3'b001;
+		11'd1358:	ff_slot_rom <= 3'b010;
+		11'd1360:	ff_slot_rom <= 3'b001;
+		11'd1366:	ff_slot_rom <= 3'b010;
+		default:	ff_slot_rom <= 3'b000;
+		endcase
+	end
+
+	assign w_slot			= !ff_display_slots ? ff_slot_rom[0]:
+							  ff_sprite_slots   ? ff_slot_rom[2]: ff_slot_rom[1];
+
+	//	Step delays of the current command
+	always @(*) begin
+		case( ff_command )
+		c_point:	w_start_delta = 8'd63;
+		c_lmmm:		w_start_delta = 8'd64;
+		c_lmcm:		w_start_delta = 8'd76;
+		c_lmmv,
+		c_lmmc,
+		c_pset,
+		c_srch:		w_start_delta = 8'd88;
+		c_hmmm,
+		c_ymmm:		w_start_delta = 8'd100;
+		default:	w_start_delta = 8'd112;		//	HMMV, LINE, HMMC
+		endcase
+	end
+
+	always @(*) begin
+		if( ff_command == c_lmmm && ff_seq_phase == 2'd0 ) begin
+			w_internal_delta = 8'd32;
+		end
+		else begin
+			w_internal_delta = 8'd24;
+		end
+	end
+
+	assign w_internal_count	= (ff_command == c_lmmm) ? 2'd2:
+							  (ff_command == c_hmmm || ff_command == c_ymmm || ff_command == c_lmmv ||
+							   ff_command == c_line || ff_command == c_pset) ? 2'd1: 2'd0;
+
+	always @(*) begin
+		case( ff_command )
+		c_hmmv:		w_next_delta = ff_seq_eol ? 8'd104: 8'd46;
+		c_hmmm:		w_next_delta = ff_seq_eol ? 8'd128: 8'd60;
+		c_ymmm:		w_next_delta = ff_seq_eol ? 8'd104: 8'd36;
+		c_lmmv:		w_next_delta = ff_seq_eol ? 8'd130: 8'd72;
+		c_lmmm:		w_next_delta = ff_seq_eol ? 8'd128: 8'd60;
+		c_line:		w_next_delta = ff_seq_eol ? 8'd120: 8'd84;
+		c_srch:		w_next_delta = 8'd88;
+		default:	w_next_delta = 8'd0;		//	HMMC, LMMC, LMCM: the next slot
+		endcase
+	end
+
+	assign w_delta			= ((ff_seq_state == c_seq_first   ) ? { 1'b0, w_start_delta    }:
+							   (ff_seq_state == c_seq_internal) ? { 1'b0, w_internal_delta }:
+							                                      { 1'b0, w_next_delta     }) +
+							  { 8'd0, ff_display_slots & ff_sprite_slots };
+	assign w_since			= { 1'b0, ff_seq_since } + 9'd1;
+
+	//	The engine waits at the start of a step (and, for HMMC / LMMC, has
+	//	the CPU's byte)
+	assign w_step_state		= (ff_state == c_state_point || ff_state == c_state_pset || ff_state == c_state_srch ||
+							   ff_state == c_state_line  || ff_state == c_state_lmmv || ff_state == c_state_lmmm ||
+							   ff_state == c_state_lmcm  || ff_state == c_state_lmmc || ff_state == c_state_hmmv ||
+							   ff_state == c_state_hmmm  || ff_state == c_state_ymmm || ff_state == c_state_hmmc);
+	assign w_engine_ready	= w_step_state && !ff_seq_grant &&
+							  !((ff_command == c_hmmc || ff_command == c_lmmc) && ff_transfer_ready);
+
+	assign w_seq_hold		= w_seq_on && ((w_step_state && !ff_seq_grant) ||
+							  (ff_state == c_state_pre_finish && (ff_seq_state == c_seq_first || ff_seq_state == c_seq_internal)));
+
+	always @( posedge clk ) begin
+		if( !reset_n ) begin
+			ff_seq_state	<= c_seq_idle;
+			ff_seq_phase	<= 2'd0;
+			ff_seq_since	<= 8'd0;
+			ff_seq_grant	<= 1'b0;
+		end
+		else if( ff_start ) begin
+			ff_seq_state	<= c_seq_first;
+			ff_seq_phase	<= 2'd0;
+			ff_seq_since	<= 8'd0;
+			ff_seq_grant	<= 1'b0;
+		end
+		else if( !ff_command_execute ) begin
+			ff_seq_state	<= c_seq_idle;
+			ff_seq_grant	<= 1'b0;
+		end
+		else begin
+			//	The engine takes the grant when it runs the first state of the step
+			if( w_step_state && ff_seq_grant && !ff_cache_vram_valid ) begin
+				ff_seq_grant	<= 1'b0;
+			end
+			if( ff_slot_tick ) begin
+				if( ff_seq_state != c_seq_idle && w_slot && (w_since >= w_delta) &&
+				    (ff_seq_state != c_seq_next || w_engine_ready) ) begin
+					//	A V9938 access in this slot
+					ff_seq_since	<= 8'd0;
+					if( ff_seq_state == c_seq_internal && ff_seq_phase != (w_internal_count - 2'd1) ) begin
+						ff_seq_phase	<= ff_seq_phase + 2'd1;
+					end
+					else if( ff_seq_state == c_seq_internal ) begin
+						ff_seq_state	<= c_seq_next;
+					end
+					else begin
+						//	First access of a step: the engine does the step
+						ff_seq_grant	<= 1'b1;
+						ff_seq_phase	<= 2'd0;
+						ff_seq_state	<= (w_internal_count != 2'd0) ? c_seq_internal: c_seq_next;
+					end
+				end
+				else begin
+					ff_seq_since	<= w_since[8] ? 8'd255: w_since[7:0];
+				end
+			end
+		end
+	end
+
+	//	End of line (or the minor axis step of LINE) of the step the engine
+	//	does: the longer delta to the next step
+	always @( posedge clk ) begin
+		if( !reset_n ) begin
+			ff_seq_eol	<= 1'b0;
+		end
+		else if( ff_start || ff_cache_vram_valid || w_seq_hold ) begin
+			//	hold
+		end
+		else if( ff_state == c_state_line_make ) begin
+			ff_seq_eol	<= w_line_shift;
+		end
+		else if( ff_state == c_state_hmmv      || ff_state == c_state_hmmm_make || ff_state == c_state_ymmm_make ||
+		         ff_state == c_state_lmmv_make || ff_state == c_state_lmmm_make ) begin
+			ff_seq_eol	<= w_nx_end || w_sx_overflow || w_dx_overflow;
+		end
+	end
+
+	// --------------------------------------------------------------------
 	//	State machine
 	// --------------------------------------------------------------------
 	always @( posedge clk ) begin
@@ -1214,6 +1686,10 @@ module vdp_command (
 				ff_cache_vram_valid <= 1'b0;
 			end
 		end
+		else if( w_seq_hold ) begin
+			//	Wait for the V9938 access slot of this step (see Access slot timing)
+			ff_count_valid			<= 1'b0;
+		end
 		else begin
 			case( ff_state )
 			//	STOP command --------------------------------------------------
@@ -1264,7 +1740,7 @@ module vdp_command (
 				ff_cache_vram_valid		<= 1'b1;
 				ff_cache_vram_write		<= 1'b1;
 				ff_cache_vram_wdata		<= w_destination;
-				if( reg_command_high_speed_mode ) begin
+				if( reg_command_high_speed_mode || w_slot_timing ) begin
 					ff_state				<= c_state_pre_finish;
 				end
 				else begin
@@ -1351,7 +1827,7 @@ module vdp_command (
 				if( w_nx_end || w_dx_overflow || (ff_diy == 1'b1 && ff_dy == 11'd0 && w_dy_overflow == 1'b1) ) begin
 					ff_state				<= c_state_pre_finish;
 				end
-				else if( reg_command_high_speed_mode ) begin
+				else if( reg_command_high_speed_mode || w_slot_timing ) begin
 					//	SX, DX のカウントアップが終わるまでの 1clk を待機する
 					ff_wait_counter			<= 8'd1;
 					ff_next_state			<= c_state_line;
@@ -1385,7 +1861,7 @@ module vdp_command (
 				if( (w_nx_end || w_sx_overflow || w_dx_overflow) && (w_ny_end || w_dy_overflow) ) begin
 					ff_state				<= c_state_pre_finish;
 				end
-				else if( reg_command_high_speed_mode ) begin
+				else if( reg_command_high_speed_mode || w_slot_timing ) begin
 					//	SX, DX のカウントアップが終わるまでの 1clk を待機する
 					ff_wait_counter			<= 8'd1;
 					ff_next_state			<= c_state_lmmv;
@@ -1432,7 +1908,7 @@ module vdp_command (
 				if( (w_nx_end || w_sx_overflow || w_dx_overflow) && (w_ny_end || w_sy_overflow || w_dy_overflow) ) begin
 					ff_state				<= c_state_pre_finish;
 				end
-				else if( reg_command_high_speed_mode ) begin
+				else if( reg_command_high_speed_mode || w_slot_timing ) begin
 					//	SX, DX のカウントアップが終わるまでの 1clk を待機する
 					ff_wait_counter			<= 8'd1;
 					ff_next_state			<= c_state_lmmm;
@@ -1509,7 +1985,7 @@ module vdp_command (
 					ff_finish_flag			<= 1'b1;
 					ff_state				<= c_state_lmmc_next;
 				end
-				else if( reg_command_high_speed_mode ) begin
+				else if( reg_command_high_speed_mode || w_slot_timing ) begin
 					ff_state				<= c_state_lmmc_next;
 				end
 				else begin
@@ -1539,7 +2015,7 @@ module vdp_command (
 				if( (w_nx_end || w_sx_overflow || w_dx_overflow) && (w_ny_end || w_dy_overflow) ) begin
 					ff_state				<= c_state_pre_finish;
 				end
-				else if( reg_command_high_speed_mode ) begin
+				else if( reg_command_high_speed_mode || w_slot_timing ) begin
 					//	SX, DX のカウントアップが終わるまでの 1clk を待機する
 					ff_wait_counter			<= 8'd1;
 					ff_next_state			<= c_state_hmmv;
@@ -1572,7 +2048,7 @@ module vdp_command (
 				if( (w_nx_end || w_sx_overflow || w_dx_overflow) && (w_ny_end || w_sy_overflow || w_dy_overflow) ) begin
 					ff_state				<= c_state_pre_finish;
 				end
-				else if( reg_command_high_speed_mode ) begin
+				else if( reg_command_high_speed_mode || w_slot_timing ) begin
 					//	SX, DX のカウントアップが終わるまでの 1clk を待機する
 					ff_wait_counter			<= 8'd1;
 					ff_next_state			<= c_state_hmmm;
@@ -1606,7 +2082,7 @@ module vdp_command (
 				if( (w_nx_end || w_sx_overflow || w_dx_overflow) && (w_ny_end || w_sy_overflow || w_dy_overflow) ) begin
 					ff_state				<= c_state_pre_finish;
 				end
-				else if( reg_command_high_speed_mode ) begin
+				else if( reg_command_high_speed_mode || w_slot_timing ) begin
 					//	SX, DX のカウントアップが終わるまでの 1clk を待機する
 					ff_wait_counter			<= 8'd1;
 					ff_next_state			<= c_state_ymmm;
@@ -1635,7 +2111,7 @@ module vdp_command (
 						ff_finish_flag			<= 1'b1;
 						ff_state				<= c_state_hmmc_next;
 					end
-					else if( reg_command_high_speed_mode ) begin
+					else if( reg_command_high_speed_mode || w_slot_timing ) begin
 						ff_state				<= c_state_hmmc_next;
 					end
 					else begin
@@ -1799,7 +2275,7 @@ module vdp_command (
 			c_state_wait_rdata_en: begin
 				//	Wait until the results of the lead request arrive.
 				if( w_cache_vram_rdata_en ) begin
-					if( reg_command_high_speed_mode || ff_wait_count == 6'd0 ) begin
+					if( reg_command_high_speed_mode || w_slot_timing || ff_wait_count == 6'd0 ) begin
 						//	Activate cache flush and wait for it to complete.
 						ff_state				<= ff_next_state;
 						ff_cache_flush_start	<= (ff_next_state == c_state_finish);
