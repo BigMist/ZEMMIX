@@ -38,7 +38,7 @@ set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/uart_lite.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/wifi_lite.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/ram.vhd]
-set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path)../ocm-pld-dev/esemsx3/src/peripheral/rtc.v]
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) rtc.v]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/swioports.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/systemtimer.vhd]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../R800/rtl/r800_timing.vhd]

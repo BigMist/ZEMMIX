@@ -174,6 +174,8 @@ entity emsx_top is
         vdp_field_o     : out   std_logic;                                      -- VDP field (EO page) and R#9 IL, for the
         vdp_il_o        : out   std_logic;                                      -- 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
         vdp_gamma_i     : in    std_logic := '0';                               -- OSD: VDP colour curve, 1 = openMSX (f7c.7)
+        rtc_set_i       : in    std_logic := '0';                               -- MiST clock into the MSX RTC (ZEMMIX-0jv):
+        rtc_i           : in    std_logic_vector( 63 downto 0 ) := (others => '0'); -- user_io rtc, loaded on a rtc_set_i pulse
         ear_i           : in    std_logic;
         mic_o           : out   std_logic;
         midi_o          : out   std_logic;
@@ -420,7 +422,9 @@ architecture RTL of emsx_top is
             wrt         : in    std_logic;
             adr         : in    std_logic_vector( 15 downto 0 );
             dbi         : out   std_logic_vector(  7 downto 0 );
-            dbo         : in    std_logic_vector(  7 downto 0 )
+            dbo         : in    std_logic_vector(  7 downto 0 );
+            rtc_set     : in    std_logic;                          -- ZEMMIX: load the MiST clock
+            rtc_in      : in    std_logic_vector( 63 downto 0 )
         );
     end component;
 
@@ -3400,7 +3404,7 @@ begin
     );
 
     U07 : rtc
-        port map(clk21m, '0', rtcena, RtcReq, open, wrt, adr, RtcDbi, dbo);
+        port map(clk21m, '0', rtcena, RtcReq, open, wrt, adr, RtcDbi, dbo, rtc_set_i, rtc_i);
 
     U08 : kanji
         port map(clk21m, reset, KanReq, open, wrt, adr, KanDbi, dbo, kan_cyc,
