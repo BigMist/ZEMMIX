@@ -22,16 +22,16 @@ module v99_bob
 	input            clk,               // clk_sys
 	input            field,
 
-	input      [5:0] r_in,              // the V9990 at 15 kHz (on clk)
-	input      [5:0] g_in,
-	input      [5:0] b_in,
+	input      [7:0] r_in,              // the V9990 at 15 kHz (on clk)
+	input      [7:0] g_in,
+	input      [7:0] b_in,
 	input            hs_n_in,
 	input            vs_n_in,
 	input            blank_in,
 
-	output reg [5:0] r_out,             // 31 kHz, one sample per clk
-	output reg [5:0] g_out,
-	output reg [5:0] b_out,
+	output reg [7:0] r_out,             // 31 kHz, one sample per clk
+	output reg [7:0] g_out,
+	output reg [7:0] b_out,
 	output reg       hs_n_out,
 	output reg       vs_n_out,
 	output reg       blank_out
@@ -49,7 +49,7 @@ reg        lb_fld [4];
 
 wire hs_fall = hs_d & ~hs_n_in;
 
-reg [17:0] lb [4096];                   // {r, g, b}, line in bits 11-10 of the address
+reg [23:0] lb [4096];                   // {r, g, b}, line in bits 11-10 of the address
 reg        lbb [4096];                  // blank
 
 always @(posedge clk) begin
@@ -75,7 +75,7 @@ wire  [1:0] l1   = wb - 2'd1;           // line L, the last one written
 wire  [1:0] l2   = wb - 2'd2;           // line L - 1
 wire  [1:0] src  = (!half && lb_fld[l1]) ? l2 : l1;
 
-reg  [17:0] lq;
+reg  [23:0] lq;
 reg         lqb, s1_hs, s1_vs;
 
 always @(posedge clk) begin

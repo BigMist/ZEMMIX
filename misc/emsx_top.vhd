@@ -137,9 +137,9 @@ entity emsx_top is
         pLedPwr         : out   std_logic;                                      -- 0=Off, 1=On (red)
 
         -- Video, Audio ports
-        pDac_VR         : inout std_logic_vector(  5 downto 0 );                -- RGB_Red / Svideo_C
-        pDac_VG         : inout std_logic_vector(  5 downto 0 );                -- RGB_Grn / Svideo_Y
-        pDac_VB         : inout std_logic_vector(  5 downto 0 );                -- RGB_Blu / Composite Video
+        pDac_VR         : inout std_logic_vector(  7 downto 0 );                -- RGB_Red / Svideo_C (8 bits: ZEMMIX VDPs)
+        pDac_VG         : inout std_logic_vector(  7 downto 0 );                -- RGB_Grn / Svideo_Y
+        pDac_VB         : inout std_logic_vector(  7 downto 0 );                -- RGB_Blu / Composite Video
         --pDac_SL         : out   std_logic_vector(  5 downto 0 ) := "ZZZZZZ";    -- Sound-L
         --pDac_SR         : out   std_logic_vector(  5 downto 0 ) := "ZZZZZZ";    -- Sound-R
 
@@ -467,9 +467,9 @@ architecture RTL of emsx_top is
             centerYJK_R25_n : in    std_logic;                          -- for TH9958 VDP core
 
             -- Video Output
-            pVideoR         : out   std_logic_vector(  5 downto 0 );
-            pVideoG         : out   std_logic_vector(  5 downto 0 );
-            pVideoB         : out   std_logic_vector(  5 downto 0 );
+            pVideoR         : out   std_logic_vector(  7 downto 0 );    -- 8 bits (V9968 / F18A wrappers)
+            pVideoG         : out   std_logic_vector(  7 downto 0 );
+            pVideoB         : out   std_logic_vector(  7 downto 0 );
 
             pVideoHS_n      : out   std_logic;
             pVideoVS_n      : out   std_logic;
@@ -1058,9 +1058,9 @@ architecture RTL of emsx_top is
     signal  OFFSET_Y        : std_logic_vector(  6 downto 0 );
 
     -- Video signals
-    signal  VideoR          : std_logic_vector( 5 downto 0 );                       -- RGB Red
-    signal  VideoG          : std_logic_vector( 5 downto 0 );                       -- RGB Green
-    signal  VideoB          : std_logic_vector( 5 downto 0 );                       -- RGB Blue
+    signal  VideoR          : std_logic_vector( 7 downto 0 );                       -- RGB Red (8 bits)
+    signal  VideoG          : std_logic_vector( 7 downto 0 );                       -- RGB Green
+    signal  VideoB          : std_logic_vector( 7 downto 0 );                       -- RGB Blue
     signal  VideoHS_n       : std_logic;                                            -- Horizontal Sync
     signal  VideoVS_n       : std_logic;                                            -- Vertical Sync
     signal  VideoCS_n       : std_logic;                                            -- Composite Sync
@@ -2658,9 +2658,9 @@ begin
             -- the VGA branch (RGB, HS, VS) whatever DisplayMode is.
             case std_logic_vector'("10") is
             when "00" =>                                            -- TV 15kHz
-                pDac_VR     <= videoC;                              -- Chrominance of S-Video Out
-                pDac_VG     <= videoY;                              -- Luminance of S-Video Out
-                pDac_VB     <= videoV;                              -- Composite Video Out
+                pDac_VR     <= videoC & "00";                       -- Chrominance of S-Video Out
+                pDac_VG     <= videoY & "00";                       -- Luminance of S-Video Out
+                pDac_VB     <= videoV & "00";                       -- Composite Video Out
                 Reso_v      <= '0';                                 -- Hsync:15kHz
                 pVideoHS_n  <= 'Z';                                 -- CSync Disabled
                 pVideoVS_n  <= DACout;                              -- Audio Out (Mono)
@@ -3412,7 +3412,7 @@ begin
                         vdp_wait_n_s, vdp_busy, vdp_field_o, vdp_il_o);
 
     U21 : vencode
-        port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,
+        port map(clk21m, reset, VideoR(7 downto 2), VideoG(7 downto 2), videoB(7 downto 2), VideoHS_n, VideoVS_n,
                         videoY, videoC, videoV);
 
     U30_1 : msx_psg

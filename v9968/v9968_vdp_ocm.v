@@ -51,9 +51,9 @@ module vdp #(
 	input		[2:0]	ratiomode,
 	input				centeryjk_r25_n,
 
-	output		[5:0]	pvideor,
-	output		[5:0]	pvideog,
-	output		[5:0]	pvideob,
+	output		[7:0]	pvideor,			//	8 bits per channel (the OCM VDP has 6)
+	output		[7:0]	pvideog,
+	output		[7:0]	pvideob,
 	output				pvideohs_n,
 	output				pvideovs_n,
 	output				pvideocs_n,
@@ -388,7 +388,7 @@ module vdp #(
 	reg					ff_hs = 1'b0;
 	reg					ff_vs = 1'b0;
 	reg					ff_blank = 1'b1;
-	reg			[17:0]	ff_rgb = 18'd0;
+	reg			[23:0]	ff_rgb = 24'd0;
 
 	assign w_tick		= (w_h_count[2:0] == 3'd7);
 	assign w_column_raw	= w_screen_pos_x[13:3] + 11'd32 - { 6'd0, ~w_display_adjust[3], w_display_adjust[2:0], 1'b0 };
@@ -412,16 +412,16 @@ module vdp #(
 
 			ff_blank	<= ~(w_h_visible & w_v_visible);
 			if( w_h_visible & w_v_visible ) begin
-				ff_rgb	<= { w_pixel_r[7:2], w_pixel_g[7:2], w_pixel_b[7:2] };
+				ff_rgb	<= { w_pixel_r, w_pixel_g, w_pixel_b };
 			end
 			else begin
-				ff_rgb	<= 18'd0;
+				ff_rgb	<= 24'd0;
 			end
 		end
 	end
 
 	//	Into the CLK21M domain (CLK21M x 4 from the PLL, related clocks).
-	reg			[17:0]	ff_video_rgb = 18'd0;
+	reg			[23:0]	ff_video_rgb = 24'd0;
 	reg					ff_video_hs_n = 1'b1;
 	reg					ff_video_vs_n = 1'b1;
 	reg					ff_video_cs_n = 1'b1;
@@ -435,9 +435,9 @@ module vdp #(
 		ff_video_blank	<= ff_blank;
 	end
 
-	assign pvideor		= ff_video_rgb[17:12];
-	assign pvideog		= ff_video_rgb[11: 6];
-	assign pvideob		= ff_video_rgb[ 5: 0];
+	assign pvideor		= ff_video_rgb[23:16];
+	assign pvideog		= ff_video_rgb[15: 8];
+	assign pvideob		= ff_video_rgb[ 7: 0];
 	assign pvideohs_n	= ff_video_hs_n;
 	assign pvideovs_n	= ff_video_vs_n;
 	assign pvideocs_n	= ff_video_cs_n;

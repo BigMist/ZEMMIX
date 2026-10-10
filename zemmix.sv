@@ -751,9 +751,9 @@ end
 wire        Cmt_Out;
 
 
-wire  [5:0] R_O;
-wire  [5:0] G_O;
-wire  [5:0] B_O;
+wire  [7:0] R_O;                                // 8 bits per channel from the VDP
+wire  [7:0] G_O;
+wire  [7:0] B_O;
 wire        HSync, VSync;
 wire blank;
 wire vdp_field, vdp_il;
@@ -1041,16 +1041,16 @@ audiodac_r(
 // lines of 1368 clk_sys; clk_v99 is clk_sys x2 from the same PLL and in phase,
 // so the V9990 outputs are just registered on clk_sys.  Sampled at clk_sys/2
 // (ce_divider 1): exact for P1, P2, B0, B1 and B3, B2 / B4 / B7 lose pixels.
-wire  [5:0] vid_r, vid_g, vid_b;                // main screen (HDMI, or VGA without HDMI)
+wire  [7:0] vid_r, vid_g, vid_b;                // main screen (HDMI, or VGA without HDMI)
 wire        vid_hs, vid_vs, vid_blank;
-wire  [5:0] vga_r, vga_g, vga_b;                // VGA
+wire  [7:0] vga_r, vga_g, vga_b;                // VGA
 wire        vga_hs, vga_vs;
 wire        vid_byp, vga_byp;                   // 31 kHz already (V9990 / V9958 interlace): no scandoubler
 
 // V9958 (V9968) interlace (R#9 IL) at 31 kHz: the odd field one line lower,
 // as for the V9990 (misc/v99_bob.sv); field from the VDP (EO page)
 reg         v58_ils, v58_wv, v58_vs;
-wire  [5:0] w58_r, w58_g, w58_b;
+wire  [7:0] w58_r, w58_g, w58_b;
 wire        w58_hs, w58_vs, w58_blank;
 
 always @(posedge clk_sys) begin
@@ -1078,23 +1078,23 @@ v99_bob v58_bob
 );
 
 // the V9958 picture: as it is, or bobbed (then mist_video bypasses its scandoubler)
-wire  [5:0] v58_r_o  = v58_wv ? w58_r : R_O;
-wire  [5:0] v58_g_o  = v58_wv ? w58_g : G_O;
-wire  [5:0] v58_b_o  = v58_wv ? w58_b : B_O;
+wire  [7:0] v58_r_o  = v58_wv ? w58_r : R_O;
+wire  [7:0] v58_g_o  = v58_wv ? w58_g : G_O;
+wire  [7:0] v58_b_o  = v58_wv ? w58_b : B_O;
 wire        v58_hs_o = v58_wv ? w58_hs : HSync;
 wire        v58_vs_o = v58_wv ? w58_vs : VSync;
 wire        v58_bl_o = v58_wv ? w58_blank : blank;
 
 `ifdef V9990
-reg   [5:0] v99_r, v99_g, v99_b;
+reg   [7:0] v99_r, v99_g, v99_b;
 reg         v99_hs, v99_vs, v99_blank, v99_on, v99_ils, v99_wv, v99_fld;
 
 // the field: EO of the V9990 (v9990_cpu), 0 after its reset and flipped at
 // every frame start, when its vsync begins
 always @(posedge clk_sys) begin
-	v99_r     <= v99_red[7:2];
-	v99_g     <= v99_grn[7:2];
-	v99_b     <= v99_blu[7:2];
+	v99_r     <= v99_red;
+	v99_g     <= v99_grn;
+	v99_b     <= v99_blu;
 	v99_hs    <= v99_hsync_n;
 	v99_vs    <= v99_vsync_n;
 	v99_blank <= v99_hblank | v99_vblank;
@@ -1108,7 +1108,7 @@ always @(posedge clk_sys) begin
 end
 
 // Interlace at 31 kHz: the odd field one line lower, as on a TV (misc/v99_bob.sv)
-wire  [5:0] wv_r, wv_g, wv_b;
+wire  [7:0] wv_r, wv_g, wv_b;
 wire        wv_hs, wv_vs, wv_blank;
 
 v99_bob v99_bob
@@ -1174,7 +1174,7 @@ assign vga_vs    = vga_v58b ? w58_vs : VSync;
 wire isVGA = status[2];
 
 mist_video #(
-    .COLOR_DEPTH(6),
+    .COLOR_DEPTH(8),
 	 .SD_HCNT_WIDTH(11),
 	 .OUT_COLOR_DEPTH(VGA_BITS),
 	 .USE_BLANKS(0),
@@ -1223,7 +1223,7 @@ i2c_master #(22_000_000) i2c_master (
 
 
 mist_video #(
-	.COLOR_DEPTH(6),
+	.COLOR_DEPTH(8),
 	.SD_HCNT_WIDTH(10),
 	.OUT_COLOR_DEPTH(8),
 	.USE_BLANKS(1),                              // F18A: DE from the blank (HBlank)
