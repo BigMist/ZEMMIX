@@ -42,7 +42,7 @@ module readahead_tb;
 		.pixel_h_count(h_count), .pixel_v_count(v_count), .pixel_screen_pos_x(screen_pos_x),
 		.pixel_r(pr), .pixel_g(pg), .pixel_b(pb),
 		.pixel_display_adjust(), .pixel_50hz_mode(), .pixel_field(), .pixel_interlace_mode(),
-		.force_highspeed(1'b0),
+		.force_highspeed(1'b0), .gamma_openmsx(1'b0), .video_auto(1'b1), .video_50hz(1'b0),
 		.ext_cmd_wr(1'b0), .ext_cmd_num(6'd0), .ext_cmd_data(8'd0), .ext_cmd_ce(),
 		.button(2'b00), .pulse0(), .pulse1(), .pulse2(), .pulse3(), .pulse4(), .pulse5(),
 		.pulse6(), .pulse7()

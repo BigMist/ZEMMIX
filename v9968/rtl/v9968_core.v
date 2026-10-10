@@ -101,6 +101,11 @@ module v9968_core (
 	// ZEMMIX: colour curve, 0 = V9968 table, 1 = openMSX (gamma 1.1)
 	input				gamma_openmsx,
 
+	// ZEMMIX: 50 / 60 Hz as the OCM VDP (NTSC_PAL_TYPE, FORCED_V_MODE):
+	// video_auto = 1 follows R#9 NT, else video_50hz (1 = 50 Hz) is forced
+	input				video_auto,
+	input				video_50hz,
+
 	input				ext_cmd_wr,			//	geo3d: external command register write
 	input		[5:0]	ext_cmd_num,
 	input		[7:0]	ext_cmd_data,
@@ -224,6 +229,9 @@ module v9968_core (
 	wire				reg_vram_type;
 	wire				reg_color0_opaque;
 	wire				reg_50hz_mode;
+	wire				w_50hz_mode;					//	ZEMMIX: R#9 NT or the forced mode
+
+	assign w_50hz_mode	= video_auto ? reg_50hz_mode: video_50hz;
 	wire				reg_interleaving_mode;
 	wire				reg_interlace_mode;
 	wire				reg_212lines_mode;
@@ -395,7 +403,7 @@ module v9968_core (
 		.sprite_overmap_enable					( w_sprite_overmap_enable				),
 		.sprite_overmap								( w_sprite_overmap							),
 		.sprite_overmap_id							( w_sprite_overmap_id						),
-		.reg_50hz_mode								( reg_50hz_mode								),
+		.reg_50hz_mode								( w_50hz_mode  								),
 		.reg_212lines_mode							( reg_212lines_mode							),
 		.reg_interlace_mode							( reg_interlace_mode						),
 		.reg_display_adjust							( reg_display_adjust						),
@@ -584,7 +592,7 @@ module v9968_core (
 	assign pixel_g					= w_vdp_g;
 	assign pixel_b					= w_vdp_b;
 	assign pixel_display_adjust		= reg_display_adjust;
-	assign pixel_50hz_mode			= reg_50hz_mode;
+	assign pixel_50hz_mode			= w_50hz_mode;
 	assign pixel_field				= w_status_field;
 	assign pixel_interlace_mode		= reg_interlace_mode | reg_flat_interlace_mode;
 
