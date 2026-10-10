@@ -1,4 +1,4 @@
--- Option D model with the R800 core (misc/r800) instead of the T80s: Z80 (T80a) and R800
+-- Option D model with the R800 core (R800 submodule) instead of the T80s: Z80 (T80a) and R800
 -- sharing the OCM internal bus, switched by the S1990 R#6 like the real turboR.
 library ieee;
 use ieee.std_logic_1164.all;
@@ -132,7 +132,7 @@ begin
   end process;
 
   ---------------------------------------------------------------- R800
-  -- R800: the R800 core (misc/r800) through its T80s like bus (misc/r800/r800_bus.vhd)
+  -- R800: the R800 core (R800 submodule) through its T80s like bus (R800/rtl/r800_bus.vhd)
   r800 : entity work.r800_bus
     port map(RESET_n => not reset, CLK => clk21m, CEN => r8_cen, WAIT_n => r8_wait_n,
              INT_n => '1', NMI_n => '1', BUSRQ_n => '1', M1_n => r8_m1_n, MREQ_n => r8_merq_n,

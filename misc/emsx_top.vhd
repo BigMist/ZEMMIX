@@ -2123,7 +2123,7 @@ begin
     -- slot has read/written this very address, or the request of this
     -- bus cycle has been acked (+3 clocks for registered device data).
     ----------------------------------------------------------------
-    -- the R800 core (misc/r800, derived from NextZ80) on a T80s like bus
+    -- the R800 core (R800 submodule, derived from NextZ80) on a T80s like bus
     U01_R8 : entity work.r800_bus
         port map(
             RESET_n     => (not reset),

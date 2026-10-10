@@ -31,25 +31,25 @@ without the address dependent ones.
 | MULUB / MULUW | - | 14 / 36 |
 
 At the same clock NextZ80 is equal or early except the three 16-bit adds; at
-10.74 MHz (clk21m / 2) it is early everywhere, and `misc/r800_timing.vhd`
+10.74 MHz (clk21m / 2) it is early everywhere, and `R800/rtl/r800_timing.vhd`
 (openMSX rules: page breaks, ROM / slot waits, I/O, refresh, VDP 62 cycles)
 can hold it to the exact R800 time.
 
-## Status (the core is `misc/r800/r800_*.v`, module `R800`)
+## Status (the core is `R800/rtl/r800_*.v` (submodule rampa069/R800), module `R800`)
 
 - R800 instructions and behaviour (openMSX CPUCore.cc `IS_R800`): MULUB /
   MULUW, SLL (CB 30-37) as SLA, DD / FD CB d 30-37 (flags only), DD / FD
   before an opcode without IX / IY is a NOP of two bytes, X / Y flags never
   from the result, CPL / CCF / BIT flags.  Block repeats fetch the
   instruction again on every iteration (M1 per iteration, for the regulator).
-  Tests in `misc/sim/r800` (Verilator): `multest`, `blktest`, `iotest`,
+  Tests in `R800/sim` (Verilator, `make test`): `multest`, `blktest`, `iotest`,
   `pfxtest`; zexall CRCs compared with openMSX R800 by `zexcmp.py`.
 - Simulation: NextZ80 used `mux_rdor` in its `always @*` before computing it;
   an event driven simulator (nvc, iverilog) kept the old value (wrong address
   of a JP while held by `WAIT`).  Fixed in `r800_reg.v`.
-- Bus: `misc/r800/r800_bus.vhd` gives the core a T80s like bus (T2 until
+- Bus: `R800/rtl/r800_bus.vhd` gives the core a T80s like bus (T2 until
   `WAIT_n`, then T3, the data taken at the end of T3) for `emsx_top` and
-  `misc/r800_timing.vhd`; model in `bus/tb_dn.vhd` (R800BEN).
+  `R800/rtl/r800_timing.vhd`; model in `bus/tb_dn.vhd` (R800BEN).
 - R800BEN (`bus/tb_dn.vhd`, system timer ticks, measured / openMSX): NOP
   2874 / 2828, LD A,(HL) 1520 / 1513, LD (HL),A 1522 / 1513, PUSH / POP
   1CF9 / 1CDE, CALL / RET 0FEF / 0FE0, LDIR 247F / 2476, MULUB / W 2A28 /

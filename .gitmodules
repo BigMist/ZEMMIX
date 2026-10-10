@@ -14,3 +14,6 @@
 [submodule "IKAOPLL"]
 	path = IKAOPLL
 	url = https://github.com/ika-musume/IKAOPLL
+[submodule "R800"]
+	path = R800
+	url = https://github.com/rampa069/R800.git
