@@ -16,7 +16,8 @@
 //     is low until then, straight from the bus signals (RD_MAX at most); a Z80 at
 //     3.58 MHz that does not wait samples about 700 ns after RD.
 //     bus_status {LD, BUSY} (BUSY also while the queue is not empty) is given for 7Eh
-//     and to be ORed into the C4h status.
+//     and to be ORed into the C4h status.  Reads of C4h are not queued: one pending
+//     read is played when the queue is empty (LD2), and it does not make BUSY.
 //   * memory: the engine asks for a byte when a window starts and samples it at the
 //     next CYCLE1_CE, about 7 CE later, with no wait. The request crosses to clk_bus
 //     (toggle) and that CE is held while the data is not back: the fractional
@@ -112,14 +113,25 @@ wire        q_empty = (q_wp == q_rp);
 // bits of the old value
 reg   [1:0] x_cnt = 0;
 reg         x_rd = 0, x_pend = 0;
+// A read of the C4h status (A = 0) only matters to the engine to clear LD2: it is not
+// queued (nor BUSY) but kept as one pending read, played when the queue is empty.  A
+// status read in the queue made BUSY high for the poll that queued it: an R800, whose
+// IN is short, read BUSY from its own read on every poll and never left the loop
+// (RoboPlay, OPL4 reset).
+reg         st_pend = 0, st_take = 0;
 always @(posedge clk_eng) begin
     rdx_d <= rdx;
     wrx_d <= wrx;
+    if (st_take) st_pend <= 0;
     if (x_pend) begin
         if (x_cnt != 0) x_cnt <= x_cnt - 1'd1;
         else begin
-            q[q_wp] <= {x_rd, a_s, x_rd ? 8'h00 : di_s};
-            q_wp    <= q_wp + 1'd1;
+            if (x_rd && a_s == 3'd0)
+                st_pend <= 1;
+            else begin
+                q[q_wp] <= {x_rd, a_s, x_rd ? 8'h00 : di_s};
+                q_wp    <= q_wp + 1'd1;
+            end
             x_pend  <= 0;
         end
     end
@@ -137,6 +149,7 @@ wire  [7:0] eng_do;
 wire  [1:0] eng_status;
 wire        sample_ce;                          // the engine has a new sample
 reg         drv = 0;
+reg         drv_st = 0;                         // playing a C4h status read (not BUSY)
 reg   [3:0] ph = 0;
 reg         drv_rd = 0, drv_cs = 0, drv_rd_n = 1, drv_wr_n = 1;
 reg   [2:0] drv_a = 0;
@@ -144,11 +157,21 @@ reg   [7:0] drv_di = 0;
 reg         rd_done_t = 0;                      // to clk_bus, rd_q stable then
 reg   [7:0] rd_q = 8'hFF;
 always @(posedge clk_eng) begin
+    st_take <= 0;
     if (!drv) begin
         if (!q_empty && !eng_status[0]) begin
             {drv_rd, drv_a, drv_di} <= q[q_rp];
             q_rp   <= q_rp + 1'd1;
             drv    <= 1;
+            drv_st <= 0;
+            drv_cs <= 1;
+            ph     <= 0;
+        end
+        else if (q_empty && st_pend && !st_take && !eng_status[0]) begin
+            {drv_rd, drv_a, drv_di} <= {1'b1, 3'd0, 8'h00};
+            st_take <= 1;
+            drv    <= 1;
+            drv_st <= 1;
             drv_cs <= 1;
             ph     <= 0;
         end
@@ -245,7 +268,7 @@ always @(posedge clk_bus) begin
     rd_ok <= rd7f && rd7f_d && rd_cmp == rd_iss;  // one clock after bus_do took the answer
 
     st_s0 <= eng_status;
-    qb_s  <= {qb_s[0], drv | !q_empty};
+    qb_s  <= {qb_s[0], (drv & ~drv_st) | !q_empty};   // a status read is not BUSY
     bus_status <= {st_s0[1], st_s0[0] | qb_s[1]};
 
     if (rd7f) begin
