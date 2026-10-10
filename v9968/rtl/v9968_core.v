@@ -98,6 +98,9 @@ module v9968_core (
 	// Force Highspeed Mode
 	input				force_highspeed,
 
+	// ZEMMIX: colour curve, 0 = V9968 table, 1 = openMSX (gamma 1.1)
+	input				gamma_openmsx,
+
 	input				ext_cmd_wr,			//	geo3d: external command register write
 	input		[5:0]	ext_cmd_num,
 	input		[7:0]	ext_cmd_data,
@@ -567,7 +570,8 @@ module v9968_core (
 		.reg_color0_opaque							( reg_color0_opaque							),
 		.reg_backdrop_color							( reg_backdrop_color						),
 		.reg_ext_palette_mode						( reg_ext_palette_mode						),
-		.reg_sprite_mode3							( reg_sprite_mode3							)
+		.reg_sprite_mode3							( reg_sprite_mode3							),
+		.gamma_openmsx								( gamma_openmsx								)
 	);
 
 	// --------------------------------------------------------------------

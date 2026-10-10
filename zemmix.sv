@@ -226,6 +226,7 @@ localparam CONF_STR = {
     "O9,Tape sound,OFF,ON;",
     "OAB,Scanlines,Off,25%,50%,75%;",
     "OC,MoonSound (OPL3/OPL4),On,Off;",
+    "OF,Palette,V9968,openMSX;",
    `V99_OSD
     "T0,Reset;",
 	"V,v2.0.",`BUILD_DATE
@@ -865,6 +866,7 @@ emsx_top #(
 		  .blank_o    (blank),
 		  .vdp_field_o(vdp_field),     // VDP field (EO page) and R#9 IL: 31 kHz bob below
 		  .vdp_il_o   (vdp_il),
+		  .vdp_gamma_i(status[15]),    // OSD Palette: 0 = V9968 colours, 1 = openMSX
 
 		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
 		  .rom_dl_i    (rom_dl),                                              // ZEMMIX.ROM (YRW801) sent by the firmware

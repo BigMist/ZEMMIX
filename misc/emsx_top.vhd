@@ -173,6 +173,7 @@ entity emsx_top is
         blank_o         : out   std_logic;
         vdp_field_o     : out   std_logic;                                      -- VDP field (EO page) and R#9 IL, for the
         vdp_il_o        : out   std_logic;                                      -- 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
+        vdp_gamma_i     : in    std_logic := '0';                               -- OSD: VDP colour curve, 1 = openMSX (f7c.7)
         ear_i           : in    std_logic;
         mic_o           : out   std_logic;
         midi_o          : out   std_logic;
@@ -498,7 +499,8 @@ architecture RTL of emsx_top is
             busy            : out   std_logic;                          -- V9968: a request is still running
 
             field_o         : out   std_logic;                          -- V9968: field (EO page)
-            interlace_o     : out   std_logic                           -- V9968: R#9 IL
+            interlace_o     : out   std_logic;                          -- V9968: R#9 IL
+            gamma_i         : in    std_logic                           -- V9968: 1 = openMSX colour curve
         );
     end component;
 
@@ -3417,7 +3419,7 @@ begin
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
                         VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
-                        vdp_wait_n_s, vdp_busy, vdp_field_o, vdp_il_o);
+                        vdp_wait_n_s, vdp_busy, vdp_field_o, vdp_il_o, vdp_gamma_i);
 
     U21 : vencode
         port map(clk21m, reset, VideoR(7 downto 2), VideoG(7 downto 2), videoB(7 downto 2), VideoHS_n, VideoVS_n,

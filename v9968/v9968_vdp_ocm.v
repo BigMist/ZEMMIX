@@ -40,6 +40,7 @@ module vdp #(
 	output				busy,			//	a request (read or write) is still running in the V9968
 	output				field_o,		//	ZEMMIX: field (EO page, 1 = odd), on clk21m
 	output				interlace_o,	//	ZEMMIX: R#9 IL, on clk21m (31 kHz bob in zemmix.sv)
+	input				gamma_i,		//	ZEMMIX: 1 = openMSX colour curve (OSD), static
 
 	output				pramoe_n,
 	output				pramwe_n,
@@ -292,6 +293,12 @@ module vdp #(
 	wire				w_field;
 	wire				w_interlace_mode;
 
+	//	OSD colour curve, into the core clock
+	reg			[1:0]	ff_gamma_s = 2'd0;
+	always @( posedge clk ) begin
+		ff_gamma_s	<= { ff_gamma_s[0], gamma_i };
+	end
+
 	v9968_core u_v9968 (
 		.reset_n				( reset_n				),
 		.clk					( clk					),
@@ -324,6 +331,7 @@ module vdp #(
 		.pixel_field			( w_field				),
 		.pixel_interlace_mode	( w_interlace_mode		),
 		.force_highspeed		( vdpspeedmode			),
+		.gamma_openmsx			( ff_gamma_s[1]			),
 		.ext_cmd_wr				( 1'b0					),		//	geo3d not connected
 		.ext_cmd_num			( 6'd0					),
 		.ext_cmd_data			( 8'd0					),
