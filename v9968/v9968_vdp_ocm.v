@@ -106,6 +106,15 @@ module vdp #(
 
 	assign reset_n = ff_reset_n[2];
 
+	//	The video timing (H/V counters, sync, blank) is reset only until the
+	//	PLL locks, not by the MSX reset: VGA / HDMI get a valid (black) picture
+	//	from power-on, through the reset, the ZEMMIX.ROM download and the BIOS
+	//	load (the registers are 0: display off) (ZEMMIX-cbd).
+	reg			[2:0]	ff_video_reset_n = 3'd0;
+	always @( posedge clk ) begin
+		ff_video_reset_n	<= { ff_video_reset_n[1:0], pll_locked };
+	end
+
 	//	initial_busy: a few clocks after reset (SDRAM initialization on the
 	//	cartridge).
 	always @( posedge clk ) begin
@@ -302,8 +311,11 @@ module vdp #(
 		ff_vmode_s	<= { ff_vmode_s[2], ntsc_pal_type, ff_vmode_s[0], forced_v_mode };
 	end
 
-	v9968_core u_v9968 (
+	v9968_core #(
+		.VRAM_256K				( VRAM_256K				)
+	) u_v9968 (
 		.reset_n				( reset_n				),
+		.video_reset_n			( ff_video_reset_n[2]	),
 		.clk					( clk					),
 		.initial_busy			( w_initial_busy		),
 		.bus_address			( ff_bus_address		),

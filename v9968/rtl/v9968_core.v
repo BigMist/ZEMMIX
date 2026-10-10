@@ -57,8 +57,11 @@
 //
 //-----------------------------------------------------------------------------
 
-module v9968_core (
+module v9968_core #(
+	parameter			VRAM_256K = 1			//	ZEMMIX: 0 = 128 KB VRAM (no 256 KB mode)
+) (
 	input				reset_n,
+	input				video_reset_n,			//	ZEMMIX: reset of the video timing only (sync from power-on)
 	input				clk,					//	85.90908MHz
 
 	input				initial_busy,
@@ -261,7 +264,9 @@ module v9968_core (
 	// --------------------------------------------------------------------
 	//	CPU Interface
 	// --------------------------------------------------------------------
-	vdp_cpu_interface u_cpu_interface (
+	vdp_cpu_interface #(
+		.VRAM_256K									( VRAM_256K									)
+	) u_cpu_interface (
 		.reset_n									( reset_n									),
 		.clk										( clk										),
 		.bus_address								( bus_address								),
@@ -366,7 +371,7 @@ module v9968_core (
 	//	Timing control
 	// --------------------------------------------------------------------
 	vdp_timing_control u_timing_control (
-		.reset_n									( reset_n									),
+		.reset_n									( video_reset_n								),	//	ZEMMIX: not the MSX reset
 		.clk										( clk										),
 		.h_count									( w_h_count									),
 		.v_count									( w_v_count									),

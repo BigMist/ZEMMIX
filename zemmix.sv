@@ -533,6 +533,25 @@ wire        mouse_strobe;
 
 wire ps2k_c,ps2k_d,ps2k_c_i,ps2k_d_i;
 
+// MiST clock (user_io rtc, sent by the firmware byte by byte on clk_sys): when it
+// changes and then stays for 256 clocks, one pulse loads it into the MSX RTC
+// (misc/rtc.v); all zero (no clock) is not loaded (ZEMMIX-0jv)
+wire [63:0] mist_rtc;
+reg  [63:0] rtc_last = 64'd0;
+reg   [7:0] rtc_wait = 8'd0;
+reg         rtc_set  = 1'b0;
+
+always @(posedge clk_sys) begin
+	rtc_set  <= 1'b0;
+	rtc_last <= mist_rtc;
+	if (mist_rtc != rtc_last)
+		rtc_wait <= 8'hFF;
+	else if (rtc_wait != 8'd0) begin
+		rtc_wait <= rtc_wait - 8'd1;
+		if (rtc_wait == 8'd1 && mist_rtc[47:0] != 48'd0) rtc_set <= 1'b1;
+	end
+end
+
 user_io #(.STRLEN($size(CONF_STR)>>3), .PS2DIV(800), .FEATURES(32'h0 | (BIG_OSD << 13) | (HDMI << 14))) user_io
 (
 	.clk_sys(clk_sys),
@@ -591,6 +610,7 @@ user_io #(.STRLEN($size(CONF_STR)>>3), .PS2DIV(800), .FEATURES(32'h0 | (BIG_OSD 
 
 	.buttons(buttons),
 	.status(status),
+	.rtc(mist_rtc),                              // MiST clock (BCD), for the MSX RTC
 	.scandoubler_disable(scandoubler_disable),
 	.ypbpr(ypbpr),
 	.no_csync(no_csync)
@@ -867,6 +887,8 @@ emsx_top #(
 		  .vdp_field_o(vdp_field),     // VDP field (EO page) and R#9 IL: 31 kHz bob below
 		  .vdp_il_o   (vdp_il),
 		  .vdp_gamma_i(status[15]),    // OSD Palette: 0 = V9968 colours, 1 = openMSX
+		  .rtc_set_i  (rtc_set),       // MiST clock into the MSX RTC
+		  .rtc_i      (mist_rtc),
 
 		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
 		  .rom_dl_i    (rom_dl),                                              // ZEMMIX.ROM (YRW801) sent by the firmware

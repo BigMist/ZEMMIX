@@ -68,7 +68,7 @@ module cmd_timing_tb;
 	wire [7:0]	pr, pg, pb;
 
 	v9968_core u_core (
-		.reset_n(reset_n), .clk(clk), .initial_busy(initial_busy),
+		.reset_n(reset_n), .video_reset_n(reset_n), .clk(clk), .initial_busy(initial_busy),
 		.bus_address(bus_address), .bus_ioreq(bus_ioreq), .bus_write(bus_write),
 		.bus_valid(bus_valid), .bus_ready(bus_ready), .bus_wdata(bus_wdata),
 		.bus_rdata(bus_rdata), .bus_rdata_en(bus_rdata_en), .int_n(int_n),
