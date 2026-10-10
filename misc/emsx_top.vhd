@@ -733,6 +733,10 @@ architecture RTL of emsx_top is
         if( b )then return 1; else return 0; end if;
     end function;
     constant line_rd_c : integer := line_rd_f( opl4_wave_ext_g );
+    -- The VDP (V9968) keeps its VRAM in block RAM: its SDRAM slots (DL = 1) are free
+    -- and go to the OPL4 wave memory when it has an access pending (ZEMMIX-f7c.9).
+    -- false for a VDP with its VRAM in the SDRAM (the ESE / OCM vdp.vhd).
+    constant vdp_sdram_free_c : boolean := true;
 
     component opl4_wave is
         generic(
@@ -2877,6 +2881,8 @@ begin
                 SdrSta(1) <= VideoDLClk;                                            -- 0:cpu, 1:vdp
                 if( VideoDLClk = '0' and wave_slot = '1' )then
                     SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a free cpu slot)
+                elsif( wave_slot = '1' and vdp_sdram_free_c )then
+                    SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a vdp slot)
                 elsif( VideoDLClk = '0' )then
                     SdrSta(0) <= w_wrt_req;         -- for cpu
                 else
@@ -2901,7 +2907,7 @@ begin
     sdr_hold  <= reset or rom_dl_i;
     -- during RstSeq (after the mode set) every slot writes the same few addresses again
     -- and again: the ZEMMIX.ROM loader can take any of them for its writes
-    wave_go   <= wave_slot when( VideoDLClk = '0' or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
+    wave_go   <= wave_slot when( VideoDLClk = '0' or vdp_sdram_free_c or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
     wave_sdr_adr <= "111" & wave_adr;
 
     wave_ext_req_t <= wave_req_t;
@@ -2925,6 +2931,8 @@ begin
                     ( RamReq = '0' or
                       (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
                     wave_slot <= '1';
+                elsif( vdp_sdram_free_c and wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '0' )then
+                    wave_slot <= '1';                                       -- a vdp slot (DL = 0 before it): free with the V9968
                 elsif( wave_pend = '1' and wave_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
                     wave_slot <= '1';                                       -- ZEMMIX.ROM load during RstSeq
                 elsif( wave_pend = '1' and sdr_hold = '1' and RstSeq(4 downto 3) = "11" )then
@@ -2934,9 +2942,9 @@ begin
                 end if;
             end if;
             if( not opl4_wave_ext_g and ff_sdr_seq = "101" )then
-                if( wave_slot = '1' and SdrSta(2 downto 1) = "10" )then
+                if( wave_slot = '1' and SdrSta(2) = '1' and (SdrSta(1) = '0' or vdp_sdram_free_c) )then
                     -- the access is done when its data is on the bus (read) or written,
-                    -- only in a real cpu slot (else it is tried again)
+                    -- only in a real cpu slot or a free vdp slot (else it is tried again)
                     if( wave_we = '0' )then
                         wave_rdat <= X"000000000000" & pMemDat;
                     end if;
