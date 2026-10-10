@@ -171,6 +171,8 @@ entity emsx_top is
         esp_rx_o        : out   std_logic := 'Z';
         esp_tx_i        : in    std_logic := 'Z';
         blank_o         : out   std_logic;
+        vdp_field_o     : out   std_logic;                                      -- VDP field (EO page) and R#9 IL, for the
+        vdp_il_o        : out   std_logic;                                      -- 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
         ear_i           : in    std_logic;
         mic_o           : out   std_logic;
         midi_o          : out   std_logic;
@@ -493,7 +495,10 @@ architecture RTL of emsx_top is
 
             wait_n          : out   std_logic;                           -- V9968: VRAM read in progress
 
-            busy            : out   std_logic                           -- V9968: a request is still running
+            busy            : out   std_logic;                          -- V9968: a request is still running
+
+            field_o         : out   std_logic;                          -- V9968: field (EO page)
+            interlace_o     : out   std_logic                           -- V9968: R#9 IL
         );
     end component;
 
@@ -3404,7 +3409,7 @@ begin
                         open, WeVdp_n, VdpAdr, VrmDbi, VrmDbo, VdpSpeedMode or (not hybridclk_n), RatioMode, centerYJK_R25_n,
                         VideoR, VideoG, VideoB, VideoHS_n, VideoVS_n, VideoCS_n,
                         VideoDHClk, VideoDLClk, BLANK_o, '0', ntsc_pal_type, forced_v_mode, legacy_vga, VDP_ID, OFFSET_Y,  -- V9968: always 15kHz, mist_video doubles
-                        vdp_wait_n_s, vdp_busy);
+                        vdp_wait_n_s, vdp_busy, vdp_field_o, vdp_il_o);
 
     U21 : vencode
         port map(clk21m, reset, VideoR, VideoG, videoB, VideoHS_n, VideoVS_n,

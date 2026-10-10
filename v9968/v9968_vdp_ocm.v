@@ -38,6 +38,8 @@ module vdp #(
 	output				int_n,
 	output				wait_n,
 	output				busy,			//	a request (read or write) is still running in the V9968
+	output				field_o,		//	ZEMMIX: field (EO page, 1 = odd), on clk21m
+	output				interlace_o,	//	ZEMMIX: R#9 IL, on clk21m (31 kHz bob in zemmix.sv)
 
 	output				pramoe_n,
 	output				pramwe_n,
@@ -440,4 +442,18 @@ module vdp #(
 	assign pvideovs_n	= ff_video_vs_n;
 	assign pvideocs_n	= ff_video_cs_n;
 	assign blank_o		= ff_video_blank;
+	// --------------------------------------------------------------------
+	//	Field and interlace for the 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
+	// --------------------------------------------------------------------
+	reg			[1:0]	ff_field_s = 2'd0;
+	reg			[1:0]	ff_il_s = 2'd0;
+
+	always @( posedge clk21m ) begin
+		ff_field_s	<= { ff_field_s[0], w_field };
+		ff_il_s		<= { ff_il_s[0], w_interlace_mode };
+	end
+
+	assign field_o		= ff_field_s[1];
+	assign interlace_o	= ff_il_s[1];
+
 endmodule

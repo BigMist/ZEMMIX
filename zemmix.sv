@@ -756,6 +756,7 @@ wire  [5:0] G_O;
 wire  [5:0] B_O;
 wire        HSync, VSync;
 wire blank;
+wire vdp_field, vdp_il;
 
 wire cpuClk;
 localparam true = "true";
@@ -862,6 +863,8 @@ emsx_top #(
         .pVideoHS_n (HSync),    // HSync(RGB15K, VGA31K)
         .pVideoVS_n (VSync),    // VSync(RGB15K, VGA31K)
 		  .blank_o    (blank),
+		  .vdp_field_o(vdp_field),     // VDP field (EO page) and R#9 IL: 31 kHz bob below
+		  .vdp_il_o   (vdp_il),
 
 		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
 		  .rom_dl_i    (rom_dl),                                              // ZEMMIX.ROM (YRW801) sent by the firmware
@@ -1042,7 +1045,45 @@ wire  [5:0] vid_r, vid_g, vid_b;                // main screen (HDMI, or VGA wit
 wire        vid_hs, vid_vs, vid_blank;
 wire  [5:0] vga_r, vga_g, vga_b;                // VGA
 wire        vga_hs, vga_vs;
-wire        vid_byp, vga_byp;                   // 31 kHz already (V9990 interlace): no scandoubler
+wire        vid_byp, vga_byp;                   // 31 kHz already (V9990 / V9958 interlace): no scandoubler
+
+// V9958 (V9968) interlace (R#9 IL) at 31 kHz: the odd field one line lower,
+// as for the V9990 (misc/v99_bob.sv); field from the VDP (EO page)
+reg         v58_ils, v58_wv, v58_vs;
+wire  [5:0] w58_r, w58_g, w58_b;
+wire        w58_hs, w58_vs, w58_blank;
+
+always @(posedge clk_sys) begin
+	v58_ils <= vdp_il;
+	v58_vs  <= VSync;
+	if (v58_vs & ~VSync) v58_wv <= v58_ils;     // interlace from a frame start
+end
+
+v99_bob v58_bob
+(
+	.clk       ( clk_sys    ),
+	.field     ( vdp_field  ),
+	.r_in      ( R_O        ),
+	.g_in      ( G_O        ),
+	.b_in      ( B_O        ),
+	.hs_n_in   ( HSync      ),
+	.vs_n_in   ( VSync      ),
+	.blank_in  ( blank      ),
+	.r_out     ( w58_r      ),
+	.g_out     ( w58_g      ),
+	.b_out     ( w58_b      ),
+	.hs_n_out  ( w58_hs     ),
+	.vs_n_out  ( w58_vs     ),
+	.blank_out ( w58_blank  )
+);
+
+// the V9958 picture: as it is, or bobbed (then mist_video bypasses its scandoubler)
+wire  [5:0] v58_r_o  = v58_wv ? w58_r : R_O;
+wire  [5:0] v58_g_o  = v58_wv ? w58_g : G_O;
+wire  [5:0] v58_b_o  = v58_wv ? w58_b : B_O;
+wire        v58_hs_o = v58_wv ? w58_hs : HSync;
+wire        v58_vs_o = v58_wv ? w58_vs : VSync;
+wire        v58_bl_o = v58_wv ? w58_blank : blank;
 
 `ifdef V9990
 reg   [5:0] v99_r, v99_g, v99_b;
@@ -1089,41 +1130,45 @@ v99_bob v99_bob
 );
 
 wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
-assign vid_byp = vid_v99 & v99_wv;              // HDMI: always 31 kHz
+assign vid_byp = vid_v99 ? v99_wv : v58_wv;    // HDMI: always 31 kHz
 
-assign vid_r     = ~vid_v99 ? R_O   : vid_byp ? wv_r     : v99_r;
-assign vid_g     = ~vid_v99 ? G_O   : vid_byp ? wv_g     : v99_g;
-assign vid_b     = ~vid_v99 ? B_O   : vid_byp ? wv_b     : v99_b;
-assign vid_hs    = ~vid_v99 ? HSync : vid_byp ? wv_hs    : v99_hs;
-assign vid_vs    = ~vid_v99 ? VSync : vid_byp ? wv_vs    : v99_vs;
-assign vid_blank = ~vid_v99 ? blank : vid_byp ? wv_blank : v99_blank;
+assign vid_r     = ~vid_v99 ? v58_r_o  : vid_byp ? wv_r     : v99_r;
+assign vid_g     = ~vid_v99 ? v58_g_o  : vid_byp ? wv_g     : v99_g;
+assign vid_b     = ~vid_v99 ? v58_b_o  : vid_byp ? wv_b     : v99_b;
+assign vid_hs    = ~vid_v99 ? v58_hs_o : vid_byp ? wv_hs    : v99_hs;
+assign vid_vs    = ~vid_v99 ? v58_vs_o : vid_byp ? wv_vs    : v99_vs;
+assign vid_blank = ~vid_v99 ? v58_bl_o : vid_byp ? wv_blank : v99_blank;
 
 `ifdef USE_HDMI
 wire vga_v99 = ~vid_v99;                        // VGA: the other screen
 `else
 wire vga_v99 = vid_v99;
 `endif
-assign vga_byp = vga_v99 & v99_wv & ~scandoubler_disable;    // not with 15 kHz RGB
+// VGA: not with 15 kHz RGB (then the 15 kHz picture as it is)
+wire vga_v58b = v58_wv & ~scandoubler_disable;
+assign vga_byp = vga_v99 ? (v99_wv & ~scandoubler_disable) : vga_v58b;
 
-assign vga_r     = ~vga_v99 ? R_O   : vga_byp ? wv_r  : v99_r;
-assign vga_g     = ~vga_v99 ? G_O   : vga_byp ? wv_g  : v99_g;
-assign vga_b     = ~vga_v99 ? B_O   : vga_byp ? wv_b  : v99_b;
-assign vga_hs    = ~vga_v99 ? HSync : vga_byp ? wv_hs : v99_hs;
-assign vga_vs    = ~vga_v99 ? VSync : vga_byp ? wv_vs : v99_vs;
+assign vga_r     = ~vga_v99 ? (vga_v58b ? w58_r  : R_O)   : vga_byp ? wv_r  : v99_r;
+assign vga_g     = ~vga_v99 ? (vga_v58b ? w58_g  : G_O)   : vga_byp ? wv_g  : v99_g;
+assign vga_b     = ~vga_v99 ? (vga_v58b ? w58_b  : B_O)   : vga_byp ? wv_b  : v99_b;
+assign vga_hs    = ~vga_v99 ? (vga_v58b ? w58_hs : HSync) : vga_byp ? wv_hs : v99_hs;
+assign vga_vs    = ~vga_v99 ? (vga_v58b ? w58_vs : VSync) : vga_byp ? wv_vs : v99_vs;
 `else
-assign vid_byp   = 1'b0;
-assign vga_byp   = 1'b0;
-assign vid_r     = R_O;
-assign vid_g     = G_O;
-assign vid_b     = B_O;
-assign vid_hs    = HSync;
-assign vid_vs    = VSync;
-assign vid_blank = blank;
-assign vga_r     = R_O;
-assign vga_g     = G_O;
-assign vga_b     = B_O;
-assign vga_hs    = HSync;
-assign vga_vs    = VSync;
+assign vid_byp   = v58_wv;
+assign vid_r     = v58_r_o;
+assign vid_g     = v58_g_o;
+assign vid_b     = v58_b_o;
+assign vid_hs    = v58_hs_o;
+assign vid_vs    = v58_vs_o;
+assign vid_blank = v58_bl_o;
+// VGA: not with 15 kHz RGB
+wire vga_v58b = v58_wv & ~scandoubler_disable;
+assign vga_byp   = vga_v58b;
+assign vga_r     = vga_v58b ? w58_r  : R_O;
+assign vga_g     = vga_v58b ? w58_g  : G_O;
+assign vga_b     = vga_v58b ? w58_b  : B_O;
+assign vga_hs    = vga_v58b ? w58_hs : HSync;
+assign vga_vs    = vga_v58b ? w58_vs : VSync;
 `endif
 
 wire isVGA = status[2];
