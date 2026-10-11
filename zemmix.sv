@@ -1063,9 +1063,17 @@ audiodac_r(
 // Source: the V9958 of emsx_top or the V9990 (OSD, V9990 builds).  Auto: the
 // V9990 while its display is on (R#8 DISP), else the V9958.  With HDMI the
 // main screen goes to HDMI and the other one to VGA (switch, not mirror).  Both give 15 kHz
-// lines of 1368 clk_sys; clk_v99 is clk_sys x2 from the same PLL and in phase,
-// so the V9990 outputs are just registered on clk_sys.  Sampled at clk_sys/2
-// (ce_divider 1): exact for P1, P2, B0, B1 and B3, B2 / B4 / B7 lose pixels.
+// lines of 1368 clk_sys.  V9990 builds: the video chain (mist_video VGA and
+// HDMI, the V9990 bob) runs on clk_v99 (clk_sys x2 from the same PLL, in
+// phase: the V9958 signals are taken as they are), samples at clk_v99/2 =
+// 21.48 MHz (ce_divider 1), 1368 per line: B7 (1024 pixels) and B3 exact,
+// B2 / B4 with uneven pixels (ZEMMIX-1os.8).  The HDMI clock is already
+// 42.95 MHz.  Other builds: clk_sys, samples at 10.74 MHz.
+`ifdef V9990
+wire        clk_vid = clk_v99;
+`else
+wire        clk_vid = clk_sys;
+`endif
 wire  [7:0] vid_r, vid_g, vid_b;                // main screen (HDMI, or VGA without HDMI)
 wire        vid_hs, vid_vs, vid_blank;
 wire  [7:0] vga_r, vga_g, vga_b;                // VGA
@@ -1116,7 +1124,7 @@ reg         v99_hs, v99_vs, v99_blank, v99_on, v99_ils, v99_wv, v99_fld;
 
 // the field: EO of the V9990 (v9990_cpu), 0 after its reset and flipped at
 // every frame start, when its vsync begins
-always @(posedge clk_sys) begin
+always @(posedge clk_v99) begin
 	v99_r     <= v99_red;
 	v99_g     <= v99_grn;
 	v99_b     <= v99_blu;
@@ -1136,9 +1144,9 @@ end
 wire  [7:0] wv_r, wv_g, wv_b;
 wire        wv_hs, wv_vs, wv_blank;
 
-v99_bob v99_bob
+v99_bob #(.LINE(1368), .HS(100)) v99_bob
 (
-	.clk       ( clk_sys    ),
+	.clk       ( clk_v99    ),
 	.field     ( v99_fld    ),
 	.r_in      ( v99_r      ),
 	.g_in      ( v99_g      ),
@@ -1207,7 +1215,7 @@ mist_video #(
 ) 
 mist_video 
 (	
-	.clk_sys      (clk_sys    ),
+	.clk_sys      (clk_vid    ),
 	.SPI_SCK      (SPI_SCK    ),
 	.SPI_SS3      (SPI_SS3    ),
 	.SPI_DI       (SPI_DI     ),
@@ -1221,7 +1229,7 @@ mist_video
 	.VGA_B        (VGA_B      ),
 	.VGA_VS       (VGA_VS     ),
 	.VGA_HS       (VGA_HS     ),
-	.ce_divider   (3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
+	.ce_divider   (3'd1       ),                 // pixels at clk_vid/2 (V9990 builds 1368 per line, else 684)
 	.scandoubler_disable(scandoubler_disable | vga_byp),   // F18A: 15kHz from the VDP, MiST doubles
 	.no_csync     (1'b1),
 	.scanlines    (status[11:10]),
@@ -1249,7 +1257,7 @@ i2c_master #(22_000_000) i2c_master (
 
 mist_video #(
 	.COLOR_DEPTH(8),
-	.SD_HCNT_WIDTH(10),
+	.SD_HCNT_WIDTH(11),                          // 1368 samples per line in V9990 builds
 	.OUT_COLOR_DEPTH(8),
 	.USE_BLANKS(1),                              // F18A: DE from the blank (HBlank)
 	.OSD_COLOR(3'b001),
@@ -1258,14 +1266,14 @@ mist_video #(
 )
 
 hdmi_video (
-	.clk_sys     ( clk_sys    ),
+	.clk_sys     ( clk_vid    ),
 
 	// OSD SPI interface
 	.SPI_SCK     ( SPI_SCK    ),
 	.SPI_SS3     ( SPI_SS3    ),
 	.SPI_DI      ( SPI_DI     ),
 	.scanlines   (status[11:10]),
-	.ce_divider  ( 3'd1       ),                 // F18A: pixels at clk_sys/2 (684 per line)
+	.ce_divider  ( 3'd1       ),                 // pixels at clk_vid/2 (V9990 builds 1368 per line, else 684)
 	.scandoubler_disable (vid_byp),              // F18A: HDMI always doubled (31 kHz V9990 interlace: as is)
 	.no_csync    ( 1'b1       ),
 	.ypbpr       ( 1'b0       ),
