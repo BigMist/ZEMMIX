@@ -720,52 +720,82 @@ always_comb begin
     end
 end
 
+// PS/2 mouse as an MSX mouse on port A (from MSX_MiST, made robust,
+// ZEMMIX-ab5).  The MSX reads 4 nibbles (X high, X low, Y high, Y low), one
+// per change of pin 8 (STROBE); after 100000 clk_sys (4.6 ms) without a
+// change the next change starts again with X high.  STROBE is followed and
+// the timeout runs also while the port shows the joystick, and the count
+// starts again when the mouse takes the port, so a change seen before (or a
+// stale STROBE level) cannot leave the nibbles shifted while a program reads
+// faster than the timeout.  The movement of every PS/2 packet is added up
+// (saturated) until a read starts, not replaced by the last packet.  Port A
+// stays a mouse across resets (below).
 reg        mouse_en = 0;
 reg  [5:0] mouse;
+
+function [8:0] mouse_sat(input [8:0] a, input [8:0] d);   // a + d, 9-bit signed, saturated
+    reg [9:0] s;
+    begin
+        s = {a[8], a} + {d[8], d};
+        mouse_sat = (s[9] != s[8]) ? {s[9], {8{~s[9]}}} : s[8:0];
+    end
+endfunction
 
 always @(posedge clk_sys) begin
 
     reg        stra_d;
-    reg  [8:0] mouse_x_latch;
+    reg        en_d;
+    reg  [8:0] mouse_x_acc;                     // movement since the last read, MSX sign (X inverted)
+    reg  [8:0] mouse_y_acc;
+    reg  [8:0] mouse_x_latch;                   // the movement being read (bits 8-1 sent: /2)
     reg  [8:0] mouse_y_latch;
     reg  [1:0] mouse_state;
     reg [17:0] mouse_timeout;
+    reg  [8:0] nx, ny;
 
-    if (reset) begin
-        mouse_en <= 0;
-        mouse_state <= 0;
-    end
-    else if (mouse_strobe) mouse_en <= 1;
+    // Not cleared by a reset: the MSX software looks for the mouse once, at
+    // its start, so after a reset port A must already be a mouse, not wait
+    // for the first PS/2 packet (else it found a joystick and used only the
+    // buttons, depending on whether the mouse had moved).  The joystick
+    // takes the port back when it is used.
+    if (mouse_strobe) mouse_en <= 1;
     else if (~&joya) mouse_en <= 0;
 
-    if (mouse_strobe) begin
-        mouse_x_latch <= ~mouse_x + 1'd1; //2nd complement of x
-        mouse_y_latch <= mouse_y;
-    end
+    nx = mouse_strobe ? mouse_sat(mouse_x_acc, ~mouse_x + 1'd1) : mouse_x_acc;
+    ny = mouse_strobe ? mouse_sat(mouse_y_acc, mouse_y)         : mouse_y_acc;
+    mouse_x_acc <= nx;
+    mouse_y_acc <= ny;
 
     mouse[5:4] <= ~mouse_flags[1:0];
-    if (mouse_en) begin
-        if (mouse_timeout) begin
-            mouse_timeout <= mouse_timeout - 1'd1;
-            if (mouse_timeout == 1) mouse_state <= 0;
-        end
 
-        stra_d <= msx_stra;
-        if (stra_d ^ msx_stra) begin
-            mouse_timeout <= 18'd100000;
-            mouse_state <= mouse_state + 1'd1;
-            case (mouse_state)
-            2'b00: mouse[3:0] <= {mouse_x_latch[5],mouse_x_latch[6],mouse_x_latch[7],mouse_x_latch[8]};
-            2'b01: mouse[3:0] <= {mouse_x_latch[1],mouse_x_latch[2],mouse_x_latch[3],mouse_x_latch[4]};
-            2'b10: mouse[3:0] <= {mouse_y_latch[5],mouse_y_latch[6],mouse_y_latch[7],mouse_y_latch[8]};
-            2'b11:
-            begin
-                mouse[3:0] <= {mouse_y_latch[1],mouse_y_latch[2],mouse_y_latch[3],mouse_y_latch[4]};
-                mouse_x_latch <= 0;
-                mouse_y_latch <= 0;
-            end
-            endcase
+    if (mouse_timeout) begin
+        mouse_timeout <= mouse_timeout - 1'd1;
+        if (mouse_timeout == 1) mouse_state <= 0;
+    end
+
+    stra_d <= msx_stra;
+    en_d   <= mouse_en;
+    if (reset || (mouse_en && !en_d)) begin
+        mouse_state   <= 0;
+        mouse_timeout <= 0;
+    end
+    else if (stra_d ^ msx_stra) begin
+        mouse_timeout <= 18'd100000;
+        mouse_state <= mouse_state + 1'd1;
+        case (mouse_state)
+        2'b00:
+        begin
+            // a read starts: take the movement so far
+            mouse_x_latch <= nx;
+            mouse_y_latch <= ny;
+            mouse_x_acc   <= {8'd0, nx[0]};      // bit 0 is not sent: kept for the next read
+            mouse_y_acc   <= {8'd0, ny[0]};
+            mouse[3:0] <= {nx[5],nx[6],nx[7],nx[8]};
         end
+        2'b01: mouse[3:0] <= {mouse_x_latch[1],mouse_x_latch[2],mouse_x_latch[3],mouse_x_latch[4]};
+        2'b10: mouse[3:0] <= {mouse_y_latch[5],mouse_y_latch[6],mouse_y_latch[7],mouse_y_latch[8]};
+        2'b11: mouse[3:0] <= {mouse_y_latch[1],mouse_y_latch[2],mouse_y_latch[3],mouse_y_latch[4]};
+        endcase
     end
 end
 
