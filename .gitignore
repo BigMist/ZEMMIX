@@ -20,3 +20,4 @@ tmp/
 
 # release files (cores, ROM, disk image): not in git
 release/
+.DS_Store
