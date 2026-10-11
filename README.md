@@ -100,14 +100,15 @@ kept as close to upstream as possible.
 |---|---|
 | CPU Clock | Standard, Turbo |
 | Scandoubler | VGA, RGB |
-| VGA Output | CRT, LCD |
+| Video Hz | Auto, 60 Hz (NTSC), 50 Hz (PAL) |
 | Slot 1 | External (cartridge), MegaSCC+ 2 MB |
-| Slot 2 | External, MegaRAM 1 MB, MegaSCC+ 2 MB, MegaRAM 2 MB |
+| Slot 2 | External, MegaSCC+ 2 MB, MegaRAM 1 MB/1 MB (ASCII 8), MegaRAM 2 MB/2 MB (ASCII 16) |
 | RAM | 2048 KB, 4096 KB |
 | Internal MegaSD | Off, On |
 | Tape sound | Off, On |
 | Scanlines | Off, 25 %, 50 %, 75 % |
-| MoonSound (OPL3 / OPL4) | On, Off |
+| MoonSound (OPL3 / OPL4) | On, Off (its ports; the sound stays mixed) |
+| Palette | V9968, openMSX |
 | HDMI screen (V9990 builds) | Auto, V9958, V9990 |
 
 ## SD card
@@ -120,6 +121,23 @@ kept as close to upstream as possible.
 The image has turbo R and GFX9000 software, MoonSound music (RoboPlay) and
 test tools: `ZEXDOC` / `ZEXALL` (`ZEXR800.BAT`), `R800BEN`, `SNDTEST.BAS`,
 `OPL4MEM.BAS`, `OPL4SIN.BAS`, `V99TEST.COM`.
+
+## Utilities
+
+MSX-DOS 2 tools made for ZEMMIX, in `\UTILS` of the disk image (sources in
+[`misc/tools`](misc/tools/README.md)):
+
+* **MEGALOAD**: loads a MegaROM (Konami SCC, ASCII 8, ASCII 16) into the
+  cartridge RAM of slot 1 / slot 2 **without changing it** and starts it;
+  disk-in-ROM cartridges (DSK2ROM) boot their own disk.  Use it instead of
+  ROMLOAD, which patches the ROMs it loads.
+* **DSK2DIR**: extracts the disk inside a disk-in-ROM (DSK2ROM, plain or
+  compressed) to a directory, to run the game from the SD card.
+* **SNDOFF**, **SCCCMP**: diagnostics (stuck notes, loaded ROM contents).
+
+Test tools for the VDP and the V9990 are in
+[`misc/v9968/tools`](misc/v9968/tools/README.md) and
+[`misc/v9990/tools`](misc/v9990/tools/README.md).
 
 ## Building
 
