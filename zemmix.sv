@@ -220,7 +220,7 @@ localparam CONF_STR = {
     "P1O2,Scandoubler,VGA,RGB;",
 	"P1OGH,Video Hz,Auto,60Hz (NTSC),50Hz (PAL);",
 	"P1O4,Slot1,External (Optional S3),MegaSCC+ 2MB;",
-    "P1O56,Slot2,External,MegaRAM 1MB/1MB,MegaSCC+ 2MB,MegaRAM 2MB/2MB;",
+    "P1O56,Slot2,External,MegaSCC+ 2MB,MegaRAM 1MB/1MB,MegaRAM 2MB/2MB;",   // Slot2Mode = {status[5], status[6]}: 10 SCC+, 01 ASCII 8, 11 ASCII 16 (megaram mapsel)
 	"P1O7,RAM,2048kB,4096kB;",
 	"P1O8,internal MegaSD,Off,on;",
     "O9,Tape sound,OFF,ON;",

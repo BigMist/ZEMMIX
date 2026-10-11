@@ -81,6 +81,15 @@ architecture RTL of eseopll is
 
   signal ic_n     : std_logic;
   signal pcen_n   : std_logic;
+  -- reset of the OPLL: clkena (phiM) is stopped while the MSX is in reset,
+  -- and IKAOPLL samples IC_n only on phiM, so it never saw the reset and a
+  -- note went on sounding after it.  IC_n is held low with a phiM of its
+  -- own (21.48 MHz / 6) during the reset and 255 phiM after it (71 us,
+  -- IKAOPLL needs 18 with FAST_RESET, 72 without).
+  signal div6     : integer range 0 to 5 := 0;
+  signal tick     : std_logic := '0';
+  signal rst_cnt  : integer range 0 to 255 := 255;
+  signal ic_hold  : std_logic;
   signal strb     : std_logic;
   signal strb_d   : std_logic := '0';
   signal acc      : std_logic_vector(15 downto 0);
@@ -137,8 +146,27 @@ begin
 
   ack <= ack_r;
 
-  ic_n   <= not reset;
-  pcen_n <= not clkena;
+  process (clk21m)
+  begin
+    if rising_edge (clk21m) then
+      tick <= '0';
+      if div6 = 5 then
+        div6 <= 0;
+        tick <= '1';
+      else
+        div6 <= div6 + 1;
+      end if;
+      if reset = '1' then
+        rst_cnt <= 255;
+      elsif tick = '1' and rst_cnt /= 0 then
+        rst_cnt <= rst_cnt - 1;
+      end if;
+    end if;
+  end process;
+
+  ic_hold <= '1' when rst_cnt /= 0 else '0';
+  ic_n    <= not ic_hold;
+  pcen_n  <= not tick when ic_hold = '1' else not clkena;
 
   U1 : IKAOPLL
     generic map (
