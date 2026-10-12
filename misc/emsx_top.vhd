@@ -174,6 +174,10 @@ entity emsx_top is
         vdp_field_o     : out   std_logic;                                      -- VDP field (EO page) and R#9 IL, for the
         vdp_il_o        : out   std_logic;                                      -- 31 kHz bob of zemmix.sv (ZEMMIX-f7c.2)
         vdp_gamma_i     : in    std_logic := '0';                               -- OSD: VDP colour curve, 1 = openMSX (f7c.7)
+        slot1_kuc_i     : in    std_logic := '0';                               -- OSD: the MegaSCC+ of slot 1 as a Konami Ultimate
+                                                                                --   Collection, 8 MB at SDRAM 16 MB (ZEMMIX-58x.1)
+        slot1_yam_i     : in    std_logic := '0';                               -- OSD: ... as a Yamanooto (Neo-Ultimate), its PSG
+                                                                                --   at 10h-11h too (ZEMMIX-58x.3)
         vdp_vmode_i     : in    std_logic_vector(  1 downto 0 ) := "00";        -- OSD Video Hz: 00 auto (R#9 / smart codes),
                                                                                 --   01 forced 60 Hz, 1x forced 50 Hz
         rtc_set_i       : in    std_logic := '0';                               -- MiST clock into the MSX RTC (ZEMMIX-0jv):
@@ -207,6 +211,10 @@ entity emsx_top is
 
         -- ZEMMIX.ROM (YRW801) from data_io index 0, to the OPL4 wave memory
         rom_dl_i       : in    std_logic := '0';
+        col_dl_i       : in    std_logic := '0';                                -- OSD Slot1 8MB ROM: the file to SDRAM 16 MB,
+        col_wr_i       : in    std_logic := '0';                                --   the MSX in reset (ZEMMIX-58x)
+        col_adr_i      : in    std_logic_vector( 22 downto 0 ) := (others => '0');
+        col_dat_i      : in    std_logic_vector(  7 downto 0 ) := (others => '0');
         rom_wr_i       : in    std_logic := '0';
         rom_dat_i      : in    std_logic_vector(  7 downto 0 ) := (others => '0');
 
@@ -579,7 +587,12 @@ architecture RTL of emsx_top is
             wavr        : out   std_logic_vector( 14 downto 0 );
 
             -- Extended MegaROM Reading, Added by KdL, 2024/Feb/03rd
-            xmr_ena     : in    std_logic
+            xmr_ena     : in    std_logic;
+
+            kuc         : in    std_logic := '0';
+            ramadr22    : out   std_logic;
+            yam         : in    std_logic := '0';
+            colnew      : in    std_logic := '0'
         );
     end component;
 
@@ -1099,6 +1112,11 @@ architecture RTL of emsx_top is
     signal  Scc1Ram         : std_logic;
     signal  Scc1Wrt         : std_logic;
     signal  Scc1Adr         : std_logic_vector( 21 downto 0 );
+    signal  Scc1Adr22       : std_logic;
+    signal  Slot1Kuc        : std_logic;
+    signal  Slot1Yam        : std_logic;
+    signal  Slot1Col        : std_logic;
+    signal  Psg2On          : std_logic;
     signal  Scc1AmpL        : std_logic_vector( 14 downto 0 );
 
     signal  Scc2Req         : std_logic;
@@ -1147,6 +1165,22 @@ architecture RTL of emsx_top is
     signal  wave_pend       : std_logic;
     signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
     signal  wave_go         : std_logic;                                             -- wave_slot for this slot (cpu slot, or any during RstSeq)
+    -- OSD collection load (ZEMMIX-58x): through the wave slots of this SDRAM
+    -- (s1_*: the OPL4 wave memory, or the collection while col_dl_i)
+    type colf_t is array (0 to 15) of std_logic_vector( 30 downto 0 );
+    signal  colf            : colf_t;
+    signal  colf_wp         : std_logic_vector(  3 downto 0 ) := (others => '0');
+    signal  colf_rp         : std_logic_vector(  3 downto 0 ) := (others => '0');
+    signal  colw_req_t      : std_logic := '0';
+    signal  colw_done_t     : std_logic := '0';
+    signal  colw_busy       : std_logic := '0';
+    signal  colw_adr        : std_logic_vector( 22 downto 0 ) := (others => '0');
+    signal  colw_dat        : std_logic_vector(  7 downto 0 ) := (others => '0');
+    signal  colw_pend       : std_logic;
+    signal  s1_pend         : std_logic;
+    signal  s1_we           : std_logic;
+    signal  s1_adr          : std_logic_vector( 24 downto 0 );
+    signal  s1_wdat         : std_logic_vector(  7 downto 0 );
     signal  sdr_hold        : std_logic;                                             -- MSX reset or ZEMMIX.ROM download: the sequencer runs without the VDP
     signal  sdr_wr_a0       : std_logic := '0';                                     -- byte of the cpu / wave write (taken at "001")
     signal  CpuAdr_r        : std_logic_vector( 24 downto 0 ) := (others => '0');   -- CpuAdr registered in memclk (ZEMMIX-dl0)
@@ -2001,7 +2035,7 @@ begin
                 dlydbi <= VdpDbi;
             elsif( mem = '0' and adr(  7 downto 2 ) = "101000" )then                                        -- PSG (AY-3-8910)
                 dlydbi <= PsgDbi;
-            elsif( mem = '0' and adr(  7 downto 2 ) = "000100" and iPsg2_ena = '1' and use_dualpsg_g )then  -- PSG2 (AY-3-8910)
+            elsif( mem = '0' and adr(  7 downto 2 ) = "000100" and Psg2On = '1' and use_dualpsg_g )then  -- PSG2 (AY-3-8910)
                 dlydbi <= Psg2Dbi;
             elsif( mem = '0' and adr(  7 downto 2 ) = "101010" )then                                        -- PPI (8255)
                 dlydbi <= PpiDbi;
@@ -2617,7 +2651,7 @@ begin
     -- access request to component
     VdpReq      <=  req when( mem = '0' and adr(7 downto 3) = "10011"                                                   )else '0';  -- I/O:98-9Fh / VDP (V9968)
     PsgReq      <=  req when( mem = '0' and adr(7 downto 2) = "101000"                                                  )else '0';  -- I/O:A0-A3h / PSG (AY-3-8910)
-    Psg2Req     <=  req when( mem = '0' and adr(7 downto 2) = "000100" and iPsg2_ena = '1' and use_dualpsg_g            )else '0';  -- I/O:10-13h / PSG2 (AY-3-8910)
+    Psg2Req     <=  req when( mem = '0' and adr(7 downto 2) = "000100" and Psg2On = '1' and use_dualpsg_g            )else '0';  -- I/O:10-13h / PSG2 (AY-3-8910)
     PpiReq      <=  req when( mem = '0' and adr(7 downto 2) = "101010"                                                  )else '0';  -- I/O:A8-ABh / PPI (8255)
     OpllReq     <=  req when( mem = '0' and adr(7 downto 1) = "0111110" and (Slot0Mode = '1' or cbios_mode = '1')       )else '0';  -- I/O:7C-7Dh / OPLL (YM2413) (Slot0 Primary Mode allows an external OPLL, C-BIOS mode does not)
     KanReq      <=  req when( mem = '0' and adr(7 downto 2) = "110110"                                                  )else '0';  -- I/O:D8-DBh / Kanji-data
@@ -2637,7 +2671,7 @@ begin
 
     BusDir  <=  '1' when( pSltAdr(7 downto 3) = "10011"                                         )else   -- I/O:98-9Fh / VDP (V9968)
                 '1' when( pSltAdr(7 downto 2) = "101000"                                        )else   -- I/O:A0-A3h / PSG (AY-3-8910)
-                '1' when( pSltAdr(7 downto 2) = "000100" and iPsg2_ena = '1' and use_dualpsg_g  )else   -- I/O:10-13h / PSG2 (AY-3-8910)
+                '1' when( pSltAdr(7 downto 2) = "000100" and Psg2On = '1' and use_dualpsg_g  )else   -- I/O:10-13h / PSG2 (AY-3-8910)
                 '1' when( pSltAdr(7 downto 2) = "101010"                                        )else   -- I/O:A8-ABh / PPI (8255)
                 '1' when( pSltAdr(7 downto 2) = "110110" and JIS2_ena = '1'                     )else   -- I/O:D8-DBh / Kanji-data (JIS1+JIS2)
                 '1' when( pSltAdr(7 downto 1) = "1101100"                                       )else   -- I/O:D8-D9h / Kanji-data (JIS1 only)
@@ -2804,6 +2838,7 @@ begin
                             "00" & "0" & Scc2Adr(20) & not Scc2Adr(20)      when( iSltScc2 = '1' and FullRAM = '1' )else        -- [A~B]1xxxxx => 2048 kB ESE-SCC2-SMN(H)(M4)           <= only for SDRAM < 16 MB + Mapper 4096 kB
                             "00" & not Scc2Adr(21) & Scc2Adr(21 downto 20)  when( iSltScc2 = '1' )else                          -- [ B ]0xxxxx => 2048 kB ESE-SCC2-SMN(H)(M2)           <= only for SDRAM < 16 MB + Mapper 2048 kB
                             "01" & "100"                                    when( iSltLin1 = '1' and SdrSize /= "00" )else      -- [ C ]2xxxxx =>   64 kB Linear over ESE-SCC1
+                            "10" & Scc1Adr22 & Scc1Adr(21 downto 20)        when( iSltScc1 = '1' and Slot1Col = '1' )else       -- [ E ]1000000-17FFFFF => 8192 kB KUC / Yamanooto (slot 1)
                             "01" & "10" & Scc1Adr(20)                       when( iSltScc1 = '1' and SdrSize /= "00" )else      -- [ C ]2xxxxx => 2048 kB ESE-SCC1
                             "00" & "001"                                    when( iSltLin1 = '1' and FullRAM = '1' )else        -- [ A ]1xxxxx =>   64 kB Linear over ESE-SCC1-SMN(M4)  <= only for SDRAM < 16 MB + Mapper 4096 kB
                             "00" & "0" & Scc1Adr(20) & not Scc1Adr(20)      when( iSltScc1 = '1' and FullRAM = '1' )else        -- [A~B]1xxxxx => 2048 kB ESE-SCC1-SMN(M4)              <= only for SDRAM < 16 MB + Mapper 4096 kB
@@ -2879,7 +2914,7 @@ begin
                     SdrSta <= "0" & RstSeq(1 downto 0);
                 elsif( RstSeq(4 downto 3) /= "11" )then
                     SdrSta <= "101";                                                -- Write (Initialize memory content)
-                elsif( sdr_hold = '1' and wave_pend = '0' )then
+                elsif( sdr_hold = '1' and s1_pend = '0' )then
                     SdrSta <= "010";                                                -- MSX reset (VDP stopped): refresh, the slot is the OPL4's if it needs it
                 elsif( iSltRfsh_n = '0' and VideoDLClk = '1' )then
                     SdrSta <= "010";                                                -- refresh
@@ -2890,9 +2925,9 @@ begin
             elsif( ff_sdr_seq = "001" and SdrSta(2) = '1' and RstSeq(4 downto 3) = "11" )then
                 SdrSta(1) <= VideoDLClk;                                            -- 0:cpu, 1:vdp
                 if( VideoDLClk = '0' and wave_slot = '1' )then
-                    SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a free cpu slot)
+                    SdrSta(0) <= s1_we;             -- for the OPL4 wave memory (in a free cpu slot)
                 elsif( wave_slot = '1' and vdp_sdram_free_c )then
-                    SdrSta(0) <= wave_we;           -- for the OPL4 wave memory (in a vdp slot)
+                    SdrSta(0) <= s1_we;             -- for the OPL4 wave memory (in a vdp slot)
                 elsif( VideoDLClk = '0' )then
                     SdrSta(0) <= w_wrt_req;         -- for cpu
                 else
@@ -2914,11 +2949,42 @@ begin
     -- A wave slot does not touch RamDbi nor the R800 slot tracking, and RamAck waits
     -- for a real cpu slot (iack drops req: a cpu write acked in a wave slot is lost).
     wave_pend <= wave_req_t xor wave_done_t;
-    sdr_hold  <= reset or rom_dl_i;
+    sdr_hold  <= reset or rom_dl_i or col_dl_i;
     -- during RstSeq (after the mode set) every slot writes the same few addresses again
     -- and again: the ZEMMIX.ROM loader can take any of them for its writes
     wave_go   <= wave_slot when( VideoDLClk = '0' or vdp_sdram_free_c or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
-    wave_sdr_adr <= "111" & wave_adr;
+    wave_sdr_adr <= s1_adr;
+    colw_pend <= colw_req_t xor colw_done_t;
+    s1_pend   <= colw_pend when( col_dl_i = '1' )else wave_pend;
+    s1_we     <= '1'       when( col_dl_i = '1' )else wave_we;
+    s1_adr    <= "10" & colw_adr when( col_dl_i = '1' )else "111" & wave_adr;
+    s1_wdat   <= colw_dat  when( col_dl_i = '1' )else wave_wdat;
+
+    -- collection bytes from the firmware (clk21m): a FIFO, one SDRAM write at a time
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            if( col_dl_i = '0' )then
+                colf_wp   <= (others => '0');
+                colf_rp   <= (others => '0');
+                colw_busy <= '0';
+            else
+                if( col_wr_i = '1' )then
+                    colf(conv_integer(colf_wp)) <= col_adr_i & col_dat_i;
+                    colf_wp <= colf_wp + 1;
+                end if;
+                if( colw_busy = '0' and colf_rp /= colf_wp )then
+                    colw_adr   <= colf(conv_integer(colf_rp))(30 downto 8);
+                    colw_dat   <= colf(conv_integer(colf_rp))( 7 downto 0);
+                    colf_rp    <= colf_rp + 1;
+                    colw_req_t <= not colw_req_t;
+                    colw_busy  <= '1';
+                elsif( colw_busy = '1' and colw_pend = '0' )then
+                    colw_busy  <= '0';
+                end if;
+            end if;
+        end if;
+    end process;
 
     wave_ext_req_t <= wave_req_t;
     wave_ext_we    <= wave_we;
@@ -2930,37 +2996,44 @@ begin
         if( memclk'event and memclk = '1' )then
             if( opl4_wave_ext_g )then
                 -- wave memory outside (2nd SDRAM): no slot of this SDRAM is taken
-                wave_slot   <= '0';
+                -- (but for a collection load, below)
                 wave_done_t <= wave_ext_done_t;                             -- with its data, in the same memclk
                 wave_rdat   <= wave_ext_rdat;
+            end if;
+            if( opl4_wave_ext_g and col_dl_i = '0' )then
+                wave_slot   <= '0';
             elsif( ff_sdr_seq = "111" )then
                 -- V9968 dot states (DH/DL): 01, 10, 00, 11. A slot starts when DH rises: with
                 -- DL = 0 it is the cpu slot, with DL = 1 the vdp slot. At "111" the previous dot
                 -- state is still there, DL = 1 before a cpu slot (as the refresh above)
-                if( wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '1' and iSltRfsh_n = '1' and
+                if( s1_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '1' and iSltRfsh_n = '1' and
                     ( RamReq = '0' or
                       (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
                     wave_slot <= '1';
-                elsif( vdp_sdram_free_c and wave_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '0' )then
+                elsif( vdp_sdram_free_c and s1_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '0' )then
                     wave_slot <= '1';                                       -- a vdp slot (DL = 0 before it): free with the V9968
-                elsif( wave_pend = '1' and wave_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
+                elsif( s1_pend = '1' and s1_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
                     wave_slot <= '1';                                       -- ZEMMIX.ROM load during RstSeq
-                elsif( wave_pend = '1' and sdr_hold = '1' and RstSeq(4 downto 3) = "11" )then
+                elsif( s1_pend = '1' and sdr_hold = '1' and RstSeq(4 downto 3) = "11" )then
                     wave_slot <= '1';                                       -- MSX reset: the firmware sends ZEMMIX.ROM with the MSX in reset
                 else
                     wave_slot <= '0';
                 end if;
             end if;
-            if( not opl4_wave_ext_g and ff_sdr_seq = "101" )then
+            if( (not opl4_wave_ext_g or col_dl_i = '1') and ff_sdr_seq = "101" )then
                 if( wave_slot = '1' and SdrSta(2) = '1' and (SdrSta(1) = '0' or vdp_sdram_free_c) )then
                     -- the access is done when its data is on the bus (read) or written,
                     -- only in a real cpu slot or a free vdp slot (else it is tried again)
-                    if( wave_we = '0' )then
-                        wave_rdat <= X"000000000000" & pMemDat;
+                    if( col_dl_i = '1' )then
+                        colw_done_t <= colw_req_t;
+                    else
+                        if( wave_we = '0' )then
+                            wave_rdat <= X"000000000000" & pMemDat;
+                        end if;
+                        wave_done_t <= wave_req_t;
                     end if;
-                    wave_done_t <= wave_req_t;
                     wave_wait   <= "00";
-                elsif( wave_pend = '0' )then
+                elsif( s1_pend = '0' )then
                     wave_wait   <= "00";
                 elsif( SdrSta(2 downto 1) = "10" and wave_wait /= "11" )then
                     wave_wait   <= wave_wait + 1;                           -- one more cpu slot waited
@@ -3014,7 +3087,7 @@ begin
                     -- byte of a cpu / wave write, taken one memclk before "010": CpuAdr(0)
                     -- comes from iSltAdr (clk21m) through the slot decoding, a long path
                     if( wave_slot = '1' )then
-                        sdr_wr_a0 <= wave_adr(0);
+                        sdr_wr_a0 <= s1_adr(0);
                     else
                         sdr_wr_a0 <= CpuAdr_r(0);
                     end if;
@@ -3142,7 +3215,7 @@ begin
                         SdrDat <= (others => 'Z');
                     else
                         if( wave_go = '1' )then
-                            SdrDat <= wave_wdat & wave_wdat;    -- OPL4 wave memory write (also during RstSeq)
+                            SdrDat <= s1_wdat & s1_wdat;        -- OPL4 wave memory / collection write
                         elsif( RstSeq(4 downto 3) /= "11" )then
                             SdrDat <= (others => '0');
                         elsif( VideoDLClk = '0' )then
@@ -3456,13 +3529,23 @@ begin
 
     U31_1 : megaram
         port map(clk21m, reset, clkena, Scc1Req, Scc1Ack, wrt, adr, Scc1Dbi, dbo,
-                        Scc1Ram, Scc1Wrt, Scc1Adr, RamDbi, open, Scc1Type, scc1_l, scc1_r, xmr_ena);
+                        Scc1Ram, Scc1Wrt, Scc1Adr, RamDbi, open, Scc1Type, scc1_l, scc1_r, xmr_ena,
+                        Slot1Kuc, Scc1Adr22, Slot1Yam, col_dl_i);
+
+    -- KUC / Yamanooto: only with 32 MB of SDRAM (16-24 MB) and the MegaSCC+ in slot 1
+    Slot1Kuc <= slot1_kuc_i and Slot1Mode when( SdrSize = "10" )else '0';
+    Slot1Yam <= slot1_yam_i and Slot1Mode when( SdrSize = "10" )else '0';
+    Slot1Col <= Slot1Kuc or Slot1Yam;
+    -- PSG2 (10h-13h): only as the PSG of a Yamanooto (before 58x.3 it was not
+    -- built at all, so iPsg2_ena never did anything in ZEMMIX)
+    Psg2On   <= Slot1Yam;
 
     Scc1Type <= Slot1Mode & "0";
 
     U31_2 : megaram
         port map(clk21m, reset, clkena, Scc2Req, Scc2Ack, wrt, adr, Scc2Dbi, dbo,
-                        Scc2Ram, Scc2Wrt, Scc2Adr, RamDbi, open, Slot2Mode, scc2_l, scc2_r, xmr_ena);
+                        Scc2Ram, Scc2Wrt, Scc2Adr, RamDbi, open, Slot2Mode, scc2_l, scc2_r, xmr_ena,
+                        '0', open, '0', '0');
 
     U32 : eseopll
         port map(clk21m, reset, clkena, OpllEnaWait, OpllReq, OpllAck, wrt, adr, dbo, OpllWav);

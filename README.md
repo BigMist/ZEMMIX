@@ -96,10 +96,15 @@ kept as close to upstream as possible.
 
 ## OSD
 
+Main menu: *Load virtual disk*, *Load ROM (max 8MB)*, *Slot1 ROM type*, then
+*DIP Settings* (CPU Clock to Internal MegaSD below), the sound, the
+video and *Reset*.
+
 | Option | Values |
 |---|---|
+| Load ROM (max 8MB) | a collection ROM into the 8 MB of slot 1 (MSX in reset, seconds) |
+| Slot1 ROM type | MegaSCC+, KUC 8MB, Yamanooto 8MB (collection cartridges, 32 MB SDRAM) |
 | CPU Clock | Standard, Turbo |
-| Scandoubler | VGA, RGB |
 | Video Hz | Auto, 60 Hz (NTSC), 50 Hz (PAL) |
 | Slot 1 | External (cartridge), MegaSCC+ 2 MB |
 | Slot 2 | External, MegaSCC+ 2 MB, MegaRAM 1 MB/1 MB (ASCII 8), MegaRAM 2 MB/2 MB (ASCII 16) |
@@ -110,6 +115,19 @@ kept as close to upstream as possible.
 | MoonSound (OPL3 / OPL4) | On, Off (its ports; the sound stays mixed) |
 | Palette | V9968, openMSX |
 | HDMI screen (V9990 builds) | Auto, V9958, V9990 |
+
+### Collection cartridges
+
+Konami Ultimate Collection (Manuel Pazos) and Konami Neo-Ultimate
+Collection (SMX Team, Yamanooto cartridge) run as the real cartridges, with
+their menus: set *Slot1* = MegaSCC+ 2MB and *Slot1 ROM type* = KUC 8MB or
+Yamanooto 8MB, then *Load ROM (max 8MB)* and pick the `.ROM` (up to 8 MB, at
+SDRAM 16-24 MB): the MSX restarts into the menu.  The mappers follow openMSX
+(KUC: offset, A21-A20, Konami / SCC, DAC; Yamanooto: 10-bit banks, Konami 4,
+its PSG on 10h-11h) and the flash takes the saves of games (Pampas &
+Selene) until the core is loaded again.  `MEGALOAD /C` does the same from
+MSX-DOS, `MEGALOAD /L` and `/G:n` load one game of a collection
+([misc/tools](misc/tools/README.md#megaload)).
 
 ## SD card
 
