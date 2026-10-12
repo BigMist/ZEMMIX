@@ -62,7 +62,14 @@ entity megaram is
         wavr        : out   std_logic_vector(14 downto 0);
 
         -- Extended MegaROM Reading                             -- Added by KdL, 2024/Feb/03rd
-        xmr_ena     : in    std_logic
+        xmr_ena     : in    std_logic;
+
+        -- ZEMMIX: Konami Ultimate Collection mapper (SCC+ mode only), 8 MB
+        kuc         : in    std_logic := '0';
+        ramadr22    : out   std_logic;
+        -- ZEMMIX: Yamanooto mapper (Konami Neo-Ultimate Collection), 8 MB
+        yam         : in    std_logic := '0';
+        colnew      : in    std_logic := '0'                -- a new image loaded: no erased sector
     );
 end megaram;
 
@@ -114,6 +121,93 @@ architecture rtl of megaram is
 
     signal SccAmp       : std_logic_vector(14 downto 0);
 
+    -- ZEMMIX: Konami mapper without SCC (Konami 4: 4000-5FFFh bank 0, bank
+    -- registers 6000-7FFFh, 8000-9FFFh, A000-BFFFh), bit 5 of the 7FFEh
+    -- register (as the mapper bit of Konami Ultimate Collection).  Not
+    -- cleared by a reset, so a game loaded by MEGALOAD survives one; a
+    -- loader writes 7FFEh (bit 4, RAM writable) and so clears it.
+    signal KonMode      : std_logic := '0';
+
+    -- ZEMMIX: Konami Ultimate Collection (Manuel Pazos), as openMSX
+    -- KonamiUltimateCollection.cc.  8 MB: A21-A20 from the mapper register,
+    -- then bank + offset (8 bits), then the 8 kB.
+    --   7FFEh offset; 7FFFh mapper register: 7-6 A21-A20, 5 Konami (1) or
+    --   Konami SCC (0) bank registers, 4 flash write, 3 bank 0 fixed (Konami)
+    --   and DAC, 2 registers 7FFE-7FFFh off (until a reset), 1 bank
+    --   switching off, 0 (ZEMMIX) with bit 4: writes go to the RAM as they
+    --   are (the loader; the flash commands are not emulated yet)
+    --   SCC (bank 2 = 3Fh) / SCC+ (BFFEh, bank 3 bit 7) in both modes.
+    signal KucReg       : std_logic_vector( 7 downto 0);
+    signal KucOfs       : std_logic_vector( 7 downto 0);
+    signal KucBank      : std_logic_vector( 7 downto 0);
+    signal KucSel       : std_logic_vector( 1 downto 0);
+    signal KucScc       : std_logic;
+
+    -- ZEMMIX: Yamanooto (The SCC Alliance), as openMSX Yamanooto.cc.
+    --   7FFFh ENAR (always written): 0 REGEN (7FFC-7FFEh and reading them),
+    --     4 WREN (writes to the flash, not the mapper), 7 (ZEMMIX) with
+    --     WREN: writes go to the RAM as they are (the loader)
+    --   7FFEh OFFR: offset (x4), added to a bank when it is written
+    --   7FFDh CFGR: 0 MDIS (no bank switching), 2 ROMDIS (reads FFh),
+    --     3 K4 (Konami 4: 6000h / 8000h / A000h, no SCC), 5-4 offset low
+    --   banks of 10 bits (8 MB); the SCC goes by the value written (raw)
+    signal YamEna       : std_logic_vector( 7 downto 0);
+    signal YamOfs       : std_logic_vector( 7 downto 0);
+    signal YamCfg       : std_logic_vector( 7 downto 0);
+    signal YBank0       : std_logic_vector( 9 downto 0);
+    signal YBank1       : std_logic_vector( 9 downto 0);
+    signal YBank2       : std_logic_vector( 9 downto 0);
+    signal YBank3       : std_logic_vector( 9 downto 0);
+    signal YamOff       : std_logic_vector( 9 downto 0);
+    signal YamNew       : std_logic_vector( 9 downto 0);
+    signal YamReg       : std_logic;
+    signal YamRd        : std_logic;
+    signal YamScc       : std_logic;
+    signal YamSel       : std_logic_vector( 1 downto 0);
+    signal YamDbi       : std_logic_vector( 7 downto 0);
+    signal ColBank      : std_logic_vector( 9 downto 0);
+
+    -- ZEMMIX: the KUC DAC (Majutsushi, Synthesizer): 7FFFh bit 3, writes to
+    -- 4000-5FFFh with A4 = 0, 8 bits unsigned, mixed with the SCC
+    signal KucDac       : std_logic_vector( 7 downto 0) := X"80";
+    signal DacWav       : std_logic_vector(14 downto 0);
+
+    -- ZEMMIX: the flash of KUC / Yamanooto (both 8 x 8 kB + 127 x 64 kB),
+    -- enough for the saves of games (Pampas & Selene): the AMD commands
+    -- (AAh to AAAh, 55h to 555h; A0h program; 80h AAh 55h 30h sector erase;
+    -- F0h reset), the state moving at the END of an access (a RAM access
+    -- never changes its path).  Program: the write goes to the RAM.  Sector
+    -- erase: one 64 kB sector at a time has a bitmap (8 kB of block RAM) of
+    -- its programmed bytes, the others read FFh; filling it takes 8192 clocks
+    -- (the sector reads 00h meanwhile: DQ7 polling waits).  Kept through a
+    -- reset.  Flash writes: KUC 7FFFh bit 4 (bit 0 = 0), Yamanooto ENAR WREN.
+    type bitmap_t is array (0 to 8191) of std_logic_vector(7 downto 0);
+    signal FlMap        : bitmap_t;
+    signal FlMapA       : std_logic_vector(12 downto 0);       -- read: the access as it goes
+    signal FlMapWA      : std_logic_vector(12 downto 0);       -- write: erase counter / latched access
+    signal FlEraW       : std_logic;
+    signal FlEraD       : std_logic_vector( 7 downto 0);
+    signal FlMapQ       : std_logic_vector( 7 downto 0);
+    signal FlMapD       : std_logic_vector( 7 downto 0);
+    signal FlMapW       : std_logic;
+    signal FlSt         : std_logic_vector( 2 downto 0) := "000";
+    signal FlWe         : std_logic;
+    signal FlProg       : std_logic;
+    signal FlReqD       : std_logic := '0';
+    signal FlAcc        : std_logic := '0';                    -- the access latched below is a flash write
+    signal FlLAdr       : std_logic_vector(12 downto 0);       -- latched: bank + address in the 8 kB
+    signal FlLBank      : std_logic_vector( 9 downto 0);
+    signal FlLDbo       : std_logic_vector( 7 downto 0);
+    signal TrkV         : std_logic := '0';
+    signal TrkSec       : std_logic_vector( 6 downto 0) := (others => '0');
+    signal FlBusy       : std_logic := '0';
+    signal FlNew        : std_logic := '0';
+    signal FlSmall      : std_logic := '0';
+    signal FlSub        : std_logic_vector( 2 downto 0) := "000";
+    signal FlCnt        : std_logic_vector(12 downto 0) := (others => '0');
+    signal InTrk        : std_logic;
+    signal FlFF         : std_logic;
+
 begin
 
     ----------------------------------------------------------------
@@ -164,13 +258,16 @@ begin
     -- [R/-] 2048 KB bank indexing $80~$FF = ASC16K(H)
 
     -- Extended RAM address
-    RamAdr(21)          <=  '0'         when( mapsel /= "11" )else
+    ramadr22            <=  ColBank(9);
+    RamAdr(21)          <=  ColBank(8)  when( kuc = '1' or yam = '1' )else
+                            '0'         when( mapsel /= "11" )else
                             '0'         when( xmr_ena = '0' )else
                             '0'         when( (SccBank0(7) = '1' or SccBank2(7) = '1' or SccBank3(7) = '1') and wrt = '1' )else
                             SccBank0(7) when( adr(14) = '1' )else
                             SccBank2(7); -- ( adr(14) = '0' );
 
-    RamAdr(20)          <=  '0'         when( xmr_ena = '0' and mapsel = "01" )else
+    RamAdr(20)          <=  ColBank(7)  when( kuc = '1' or yam = '1' )else
+                            '0'         when( xmr_ena = '0' and mapsel = "01" )else
                             '0'         when( (SccBank0(7) = '1' or SccBank2(7) = '1' or SccBank3(7) = '1') and wrt = '1' and mapsel = "01" )else
                             SccBankL    when( adr(14) = '1' and mapsel = "11" )else
                             SccBankH    when( adr(14) = '0' and mapsel = "11" )else
@@ -182,12 +279,14 @@ begin
     -- Standard RAM address (MSB was fixed to '0' in 6000-7FFFh of the original module)
     RamAdr(19)          <=  -- SccModeA(6) when( adr(14 downto 13) /= "11" and mapsel(0) = '0' )else
                             -- '0'         when(                               mapsel(0) = '0' )else
+                            ColBank(6)  when( kuc = '1' or yam = '1' )else
                             SccBank0(6) when( adr(14 downto 13) = "10" )else
                             SccBank1(6) when( adr(14 downto 13) = "11" )else
                             SccBank2(6) when( adr(14 downto 13) = "00" )else
                             SccBank3(6); -- ( adr(14 downto 13) = "01" );
 
-    RamAdr(18 downto 0) <=  SccBank0(5 downto 0) & adr(12 downto 0) when( adr(14 downto 13) = "10" )else
+    RamAdr(18 downto 0) <=  ColBank(5 downto 0) & adr(12 downto 0) when( kuc = '1' or yam = '1' )else
+                            SccBank0(5 downto 0) & adr(12 downto 0) when( adr(14 downto 13) = "10" )else
                             SccBank1(5 downto 0) & adr(12 downto 0) when( adr(14 downto 13) = "11" )else
                             SccBank2(5 downto 0) & adr(12 downto 0) when( adr(14 downto 13) = "00" )else
                             SccBank3(5 downto 0) & adr(12 downto 0); -- ( adr(14 downto 13) = "01" );
@@ -207,12 +306,72 @@ begin
 
     -- SCC data bus control
     RamDbo  <=  dbo;
-    dbi     <=  RamDbi  when( SccSel = "01" )else
+    -- an erased byte of the tracked sector (not programmed since): FFh
+    FlFF    <=  '1' when( (kuc = '1' or yam = '1') and InTrk = '1' and wrt = '0' and
+                          FlMapQ(conv_integer(adr(2 downto 0))) = '0' )else '0';
+    dbi     <=  YamDbi  when( yam = '1' and YamRd = '1' )else
+                X"00"   when( SccSel = "01" and wrt = '0' and InTrk = '1' and FlBusy = '1' )else
+                X"FF"   when( SccSel = "01" and FlFF = '1' )else
+                RamDbi  when( SccSel = "01" )else
                 WavDbi  when( SccSel = "10" )else
                 (others => '1');
 
+    -- KUC: the bank of this page + offset, its decoder
+    KucBank <=  (SccBank0 + KucOfs) when( adr(14 downto 13) = "10" )else
+                (SccBank1 + KucOfs) when( adr(14 downto 13) = "11" )else
+                (SccBank2 + KucOfs) when( adr(14 downto 13) = "00" )else
+                (SccBank3 + KucOfs);
+    KucScc  <=  '1' when( adr(8) = '0' and SccModeB(4) = '0' and
+                          ((SccModeB(5) = '0' and SccBank2(5 downto 0) = "111111" and
+                            adr(15 downto 11) = "10011" and adr(10 downto 1) /= "1111111111") or
+                           (SccModeB(5) = '1' and SccBank3(7) = '1' and
+                            adr(15 downto 11) = "10111" and adr(10 downto 1) /= "1111111111")) )else '0';
+    -- a raw write never hits a register (7FFE-7FFFh / BFFE-BFFFh): a write
+    -- that changed the mapper in the middle of its own RAM access hung the bus
+    KucSel  <=  "10" when( KucScc = '1' )else
+                "01" when( (adr(15 downto 14) = "01" or adr(15 downto 14) = "10") and
+                           (wrt = '0' or FlProg = '1' or (KucReg(4) = '1' and KucReg(0) = '1' and Dec1FFE = '0')) )else
+                "00";
+
+    -- flash writes on, and the write that programs a byte
+    FlWe    <=  '1' when( (kuc = '1' and KucReg(4) = '1' and KucReg(0) = '0') or
+                          (yam = '1' and YamEna(4) = '1' and YamEna(7) = '0') )else '0';
+    FlProg  <=  '1' when( FlWe = '1' and FlSt = "011" and wrt = '1' and
+                          (adr(15 downto 14) = "01" or adr(15 downto 14) = "10") and
+                          not (yam = '1' and YamReg = '1') and
+                          not (kuc = '1' and Dec1FFE = '1' and adr(15 downto 13) = "011") )else '0';
+    InTrk   <=  '1' when( TrkV = '1' and ColBank(9 downto 3) = TrkSec )else '0';
+
+    -- Yamanooto decoder
+    YamOff  <=  YamOfs & YamCfg(5 downto 4);
+    YamNew  <=  ("00" & dbo) + YamOff;
+    YamReg  <=  '1' when( adr(15 downto 2) = "01111111111111" )else '0';     -- 7FFC-7FFFh
+    YamRd   <=  '1' when( YamReg = '1' and wrt = '0' and YamEna(0) = '1' )else '0';
+    YamScc  <=  '1' when( YamCfg(3) = '0' and
+                          ((SccModeB(5) = '0' and SccBank2(5 downto 0) = "111111" and adr(15 downto 11) = "10011") or
+                           (SccModeB(5) = '1' and SccBank3(7) = '1' and
+                            adr(15 downto 11) = "10111" and adr(10 downto 1) /= "1111111111")) )else '0';
+    YamSel  <=  "00" when( YamRd = '1' )else
+                "10" when( YamScc = '1' and (wrt = '0' or YamEna(4) = '0') )else
+                "01" when( (adr(15 downto 14) = "01" or adr(15 downto 14) = "10") and
+                           ((wrt = '0' and YamCfg(2) = '0') or FlProg = '1' or
+                            (wrt = '1' and YamEna(4) = '1' and YamEna(7) = '1' and YamReg = '0')) )else
+                "00";
+    YamDbi  <=  X"FF"            when( adr(1 downto 0) = "00" )else       -- FPGA: not there
+                YamCfg or X"80"  when( adr(1 downto 0) = "01" )else       -- not busy
+                YamOfs           when( adr(1 downto 0) = "10" )else
+                YamEna;
+
+    -- the 8 kB bank of this page in the 8 MB (KUC / Yamanooto)
+    ColBank <=  KucReg(7 downto 6) & KucBank when( kuc = '1' )else
+                YBank0 when( adr(14 downto 13) = "10" )else
+                YBank1 when( adr(14 downto 13) = "11" )else
+                YBank2 when( adr(14 downto 13) = "00" )else
+                YBank3;
+
     -- SCC address decoder
-    SccSel  <=
+    SccSel  <=  KucSel when( kuc = '1' )else
+                YamSel when( yam = '1' )else
             "10" when   -- memory access (scc_wave)
                         (adr(8) = '0' and SccModeB(4) = '0' and mapsel(0) = '0' and
                         (DecSccA = '1' or DecSccB = '1')) else
@@ -268,8 +427,121 @@ begin
             SccBank3    <= X"03";
             SccModeA    <= (others => '0');
             SccModeB    <= (others => '0');
+            KucReg      <= (others => '0');
+            KucOfs      <= (others => '0');
+            YamEna      <= (others => '0');
+            YamOfs      <= (others => '0');
+            YamCfg      <= (others => '0');
+            YBank0      <= "00" & X"00";
+            YBank1      <= "00" & X"01";
+            YBank2      <= "00" & X"02";
+            YBank3      <= "00" & X"03";
         elsif( clk21m'event and clk21m = '1' )then
-            if( mapsel(0) = '0' )then
+            if( yam = '1' )then
+
+                -- Yamanooto: not on a raw RAM write
+                if (req = '1' and wrt = '1' and YamSel /= "01" and
+                        (adr(15 downto 14) = "01" or adr(15 downto 14) = "10")) then
+                    if (YamReg = '1' and adr(1 downto 0) = "11") then
+                        YamEna <= dbo;
+                    elsif (YamReg = '1' and YamEna(0) = '1') then
+                        if (adr(1 downto 0) = "10") then
+                            YamOfs <= dbo;
+                        elsif (adr(1 downto 0) = "01") then
+                            YamCfg <= dbo;
+                        end if;
+                    end if;
+                    if (YamEna(4) = '0' and YamCfg(0) = '0') then
+                        if (YamCfg(3) = '1') then
+                            -- Konami 4: 6000-BFFFh (bank 0 keeps its value)
+                            case adr(14 downto 13) is
+                                when "11"   => YBank1 <= YamNew; SccBank1 <= dbo;
+                                when "00"   => YBank2 <= YamNew; SccBank2 <= dbo;
+                                when "01"   => YBank3 <= YamNew; SccBank3 <= dbo;
+                                when others => null;
+                            end case;
+                        elsif (adr(12 downto 11) = "10") then
+                            -- Konami SCC: 5000h, 7000h, 9000h, B000h
+                            case adr(14 downto 13) is
+                                when "10"   => YBank0 <= YamNew; SccBank0 <= dbo;
+                                when "11"   => YBank1 <= YamNew; SccBank1 <= dbo;
+                                when "00"   => YBank2 <= YamNew; SccBank2 <= dbo;
+                                when others => YBank3 <= YamNew; SccBank3 <= dbo;
+                            end case;
+                        end if;
+                    end if;
+                    if (YamEna(4) = '0' and YamCfg(3) = '0' and adr(15 downto 1) = "101111111111111") then
+                        SccModeB <= dbo;            -- SCC mode register BFFE-BFFFh
+                    end if;
+                end if;
+
+            elsif( kuc = '1' )then
+
+                -- KUC: one write can hit several regions (not the SCC)
+                if (req = '1' and wrt = '1' and KucSel = "00" and
+                        (adr(15 downto 14) = "01" or adr(15 downto 14) = "10")) then
+                    if (KucReg(3) = '1' and adr(15 downto 13) = "010" and adr(4) = '0') then
+                        KucDac <= dbo;          -- DAC (Majutsushi, Synthesizer)
+                    end if;
+                    if (KucReg(2) = '0' and adr(15 downto 1) = "011111111111111") then
+                        if (adr(0) = '1') then
+                            KucReg <= dbo;
+                        else
+                            KucOfs <= dbo;
+                        end if;
+                    end if;
+                    if (KucReg(1) = '0') then
+                        if (KucReg(5) = '0') then
+                            -- Konami SCC: 5000-57FFh, 7000-77FFh, 9000-97FFh, B000-B7FFh
+                            if (adr(12 downto 11) = "10") then
+                                case adr(14 downto 13) is
+                                    when "10"   => SccBank0 <= dbo;
+                                    when "11"   => SccBank1 <= dbo;
+                                    when "00"   => SccBank2 <= dbo;
+                                    when others => SccBank3 <= dbo;
+                                end case;
+                            end if;
+                        else
+                            -- Konami: 5000-57FFh (unless bit 3), 6000-BFFFh
+                            case adr(14 downto 13) is
+                                when "10"   =>
+                                    if (KucReg(3) = '0' and adr(12 downto 11) = "10") then
+                                        SccBank0 <= dbo;
+                                    end if;
+                                when "11"   => SccBank1 <= dbo;
+                                when "00"   => SccBank2 <= dbo;
+                                when others => SccBank3 <= dbo;
+                            end case;
+                        end if;
+                        -- SCC mode register BFFE-BFFFh
+                        if (adr(15 downto 1) = "101111111111111") then
+                            SccModeB <= dbo;
+                        end if;
+                    end if;
+                end if;
+
+            elsif( mapsel(0) = '0' and KonMode = '1' )then
+
+                -- Konami: 6000-7FFFh (not 7FFE-7FFFh), 8000-9FFFh, A000-BFFFh
+                if (req = '1' and SccSel = "00" and wrt = '1' and adr(15 downto 13) = "011" and
+                        Dec1FFE = '0' and SccModeA(6) = '0' and SccModeA(4) = '0' and SccModeB(4) = '0') then
+                    SccBank1 <= dbo;
+                end if;
+                if (req = '1' and SccSel = "00" and wrt = '1' and adr(15 downto 13) = "100" and
+                        SccModeB(4) = '0') then
+                    SccBank2 <= dbo;
+                end if;
+                if (req = '1' and SccSel = "00" and wrt = '1' and adr(15 downto 13) = "101" and
+                        SccModeA(6) = '0' and SccModeA(4) = '0' and SccModeB(4) = '0') then
+                    SccBank3 <= dbo;
+                end if;
+                -- Mapped I/O port access on 7FFE-7FFFh ... Register write
+                if (req = '1' and SccSel = "00" and wrt = '1' and adr(15 downto 13) = "011" and
+                        Dec1FFE = '1' and SccModeB(5 downto 4) = "00") then
+                    SccModeA <= dbo;
+                end if;
+
+            elsif( mapsel(0) = '0' )then
 
                 -- Mapped I/O port access on 5000-57FFh ... Bank register write
                 if (req = '1' and SccSel = "00" and wrt = '1' and adr(15 downto 11) = "01010" and
@@ -340,6 +612,117 @@ begin
     end process;
 
     ----------------------------------------------------------------
+    -- ZEMMIX: the flash of KUC / Yamanooto
+    ----------------------------------------------------------------
+    -- bitmap: a byte for 8 flash bytes.  Read at the address of the access,
+    -- written by the erase (counter) or for a programmed byte (latched)
+    FlMapA  <=  ColBank(2 downto 0) & adr(12 downto 3);
+    FlMapWA <=  FlCnt when( FlBusy = '1' )else FlLBank(2 downto 0) & FlLAdr(12 downto 3);
+    FlEraW  <=  '1' when( FlBusy = '1' and (FlSmall = '0' or FlCnt(12 downto 10) = FlSub or FlNew = '1') )else '0';
+    FlEraD  <=  X"00" when( FlSmall = '0' or FlCnt(12 downto 10) = FlSub )else X"FF";
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            if( FlEraW = '1' )then
+                FlMap(conv_integer(FlMapWA)) <= FlEraD;
+            elsif( FlMapW = '1' )then
+                FlMap(conv_integer(FlMapWA)) <= FlMapD;
+            end if;
+            FlMapQ <= FlMap(conv_integer(FlMapA));
+        end if;
+    end process;
+
+    process( clk21m )
+        variable bm : std_logic_vector(7 downto 0);
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            FlReqD <= req;
+            FlMapW <= '0';
+            if( colnew = '1' )then
+                TrkV <= '0';
+            end if;
+            if( kuc = '0' and yam = '0' )then
+                FlSt   <= "000";
+                FlBusy <= '0';
+                FlAcc  <= '0';
+            elsif( FlBusy = '1' )then
+                -- erase: the erased range 0, the rest of a newly tracked sector 1
+                FlCnt <= FlCnt + 1;
+                if( FlCnt = "1111111111111" )then
+                    FlBusy <= '0';
+                end if;
+            elsif( req = '1' and FlReqD = '0' )then
+                -- start of an access: latch it
+                FlLAdr  <= adr(12 downto 0);
+                FlLBank <= ColBank;
+                FlLDbo  <= dbo;
+                FlAcc   <= FlWe and wrt and (adr(15) xor adr(14)) and
+                           not (yam and YamReg) and not (kuc and Dec1FFE and not adr(15) and adr(14) and adr(13));
+            elsif( req = '0' and FlReqD = '1' and FlAcc = '1' )then
+                -- end of a flash write: the command sequence
+                FlAcc <= '0';
+                case FlSt is
+                    when "000" =>
+                        if( FlLDbo = X"AA" and FlLAdr(11 downto 1) = "10101010101" )then FlSt <= "001"; end if;
+                    when "001" =>
+                        if( FlLDbo = X"55" and FlLAdr(11 downto 1) = "01010101010" )then FlSt <= "010"; else FlSt <= "000"; end if;
+                    when "010" =>
+                        if( FlLDbo = X"A0" and FlLAdr(11 downto 1) = "10101010101" )then FlSt <= "011";
+                        elsif( FlLDbo = X"80" and FlLAdr(11 downto 1) = "10101010101" )then FlSt <= "100";
+                        else FlSt <= "000"; end if;
+                    when "011" =>
+                        -- programmed (the RAM got it): mark the byte if its sector is tracked
+                        FlSt <= "000";
+                        if( TrkV = '1' and FlLBank(9 downto 3) = TrkSec )then
+                            bm := FlMapQ;
+                            bm(conv_integer(FlLAdr(2 downto 0))) := '1';
+                            FlMapD <= bm;
+                            FlMapW <= '1';
+                        end if;
+                    when "100" =>
+                        if( FlLDbo = X"AA" and FlLAdr(11 downto 1) = "10101010101" )then FlSt <= "101"; else FlSt <= "000"; end if;
+                    when "101" =>
+                        if( FlLDbo = X"55" and FlLAdr(11 downto 1) = "01010101010" )then FlSt <= "110"; else FlSt <= "000"; end if;
+                    when "110" =>
+                        FlSt <= "000";
+                        if( FlLDbo = X"30" )then
+                            -- sector erase: 8 kB in the first 64 kB, else 64 kB
+                            if( TrkV = '0' or FlLBank(9 downto 3) /= TrkSec )then
+                                FlNew <= '1';
+                            else
+                                FlNew <= '0';
+                            end if;
+                            TrkV    <= '1';
+                            TrkSec  <= FlLBank(9 downto 3);
+                            if( FlLBank(9 downto 3) = "0000000" )then FlSmall <= '1'; else FlSmall <= '0'; end if;
+                            FlSub   <= FlLBank(2 downto 0);
+                            FlCnt   <= (others => '0');
+                            FlBusy  <= '1';
+                        end if;
+                    when others =>
+                        FlSt <= "000";
+                end case;
+                if( FlLDbo = X"F0" )then
+                    FlSt <= "000";
+                end if;
+            elsif( req = '0' and FlReqD = '1' )then
+                FlAcc <= '0';
+            end if;
+        end if;
+    end process;
+
+    -- Konami mode bit: 7FFEh bit 5, kept through a reset
+    process( clk21m )
+    begin
+        if( clk21m'event and clk21m = '1' )then
+            if (kuc = '0' and yam = '0' and mapsel(0) = '0' and req = '1' and SccSel = "00" and wrt = '1' and
+                    adr(15 downto 13) = "011" and Dec1FFE = '1' and SccModeB(5 downto 4) = "00") then
+                KonMode <= dbo(5);
+            end if;
+        end if;
+    end process;
+
+    ----------------------------------------------------------------
     -- Connect components
     ----------------------------------------------------------------
     SccCh : scc_wave
@@ -359,7 +742,8 @@ begin
     ----------------------------------------------------------------
     -- Wave output (L / R)
     ----------------------------------------------------------------
-    wavl <= SccAmp;
-    wavr <= SccAmp;
+    DacWav <= (not KucDac(7)) & (not KucDac(7)) & (not KucDac(7)) & KucDac(6 downto 0) & "00000";
+    wavl <= SccAmp + DacWav when( kuc = '1' )else SccAmp;
+    wavr <= SccAmp + DacWav when( kuc = '1' )else SccAmp;
 
 end rtl;

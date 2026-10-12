@@ -215,20 +215,25 @@ wire        i2c_end;
 localparam CONF_STR = {
 	"ZEMMIX;;",
 	"S0U,IMGVHD,Load virtual disk;",
-	"P1,Configuration Switches;",
-    "P1O1,CPU Clock,Standard,Turbo;",
-    "P1O2,Scandoubler,VGA,RGB;",
+	"F2,ROM,Load ROM (max 8MB);",                       // data_io index 2: to SDRAM 16 MB, the MSX in reset (0 = ZEMMIX.ROM)
+	"OIJ,Slot1 ROM type,MegaSCC+,KUC 8MB,Yamanooto 8MB;",   // the MegaSCC+ of slot 1 or a collection mapper (8 MB at SDRAM 16 MB)
+	"-;",
+	"P1,DIP Settings;",
+	"P1O1,CPU Clock,Standard,Turbo;",
 	"P1OGH,Video Hz,Auto,60Hz (NTSC),50Hz (PAL);",
 	"P1O4,Slot1,External (Optional S3),MegaSCC+ 2MB;",
-    "P1O56,Slot2,External,MegaSCC+ 2MB,MegaRAM 1MB/1MB,MegaRAM 2MB/2MB;",   // Slot2Mode = {status[5], status[6]}: 10 SCC+, 01 ASCII 8, 11 ASCII 16 (megaram mapsel)
+	"P1O56,Slot2,External,MegaSCC+ 2MB,MegaRAM 1MB/1MB,MegaRAM 2MB/2MB;",   // Slot2Mode = {status[5], status[6]}: 10 SCC+, 01 ASCII 8, 11 ASCII 16 (megaram mapsel)
 	"P1O7,RAM,2048kB,4096kB;",
 	"P1O8,internal MegaSD,Off,on;",
-    "O9,Tape sound,OFF,ON;",
-    "OAB,Scanlines,Off,25%,50%,75%;",
-    "OC,MoonSound (OPL3/OPL4),On,Off;",
-    "OF,Palette,V9968,openMSX;",
-   `V99_OSD
-    "T0,Reset;",
+	"-;",
+	"O9,Tape sound,OFF,ON;",
+	"OC,MoonSound (OPL3/OPL4),On,Off;",
+	"-;",
+	"OF,Palette,V9968,openMSX;",
+	`V99_OSD
+	"OAB,Scanlines,Off,25%,50%,75%;",
+	"-;",
+	"T0,Reset;",
 	"V,v2.0.",`BUILD_DATE
 };
 
@@ -627,6 +632,8 @@ wire  [1:0] ioctl_ext_index;
 
 // ZEMMIX.ROM (YRW801) download, data_io index 0: the MSX in reset, the SDRAM for the loader
 wire rom_dl = ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd0;
+// OSD "Load ROM (max 8MB)", data_io index 2: a KUC / Yamanooto image to SDRAM 16 MB (ZEMMIX-58x)
+wire col_dl = ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd2;
 
 data_io data_io
 (
@@ -699,9 +706,9 @@ reg  [25:0] pw_cnt = 26'h3FFFFFF;               // 2^26 / 21.48 MHz = 3.1 s
 reg  [27:0] img_reset_cnt = 0;
 reg reset = 1'b1;
 `ifdef USE_EXTBUS	
-wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | !BUS_nRESET | rom_dl;
+wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | !BUS_nRESET | rom_dl | col_dl;
 `else
-wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | rom_dl;
+wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | rom_dl | col_dl;
 `endif
 
 always @(posedge clk_sys) begin
@@ -831,7 +838,7 @@ emsx_top #(
     .use_opl4_g(OPL3),         // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
     .opl4_wave_ext_g(SDRAM2),  // OPL4 wave memory in the 2nd SDRAM instead of the top 4 MB of the SDRAM
     .use_v9990_g(V9990),       // V9990 (GFX9000), ports 60h-6Fh
-    .use_dualpsg_g(false),// activar doble chip PSG
+    .use_dualpsg_g(true), // activar doble chip PSG
     .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
     .opl3_clk_g(OPL3_CLK)
 ) emsx (
@@ -917,12 +924,18 @@ emsx_top #(
 		  .vdp_field_o(vdp_field),     // VDP field (EO page) and R#9 IL: 31 kHz bob below
 		  .vdp_il_o   (vdp_il),
 		  .vdp_gamma_i(status[15]),    // OSD Palette: 0 = V9968 colours, 1 = openMSX
+		  .slot1_kuc_i(status[19:18] == 2'd1),   // OSD Slot1 ROM type KUC 8MB
+		  .slot1_yam_i(status[19:18] == 2'd2),   // OSD Slot1 ROM type Yamanooto 8MB
 		  .vdp_vmode_i(status[17:16]), // OSD Video Hz: 0 Auto (R#9 / SETSMART), 1 60 Hz, 2 50 Hz
 		  .rtc_set_i  (rtc_set),       // MiST clock into the MSX RTC
 		  .rtc_i      (mist_rtc),
 
 		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
-		  .rom_dl_i    (rom_dl),                                              // ZEMMIX.ROM (YRW801) sent by the firmware
+		  .rom_dl_i    (rom_dl),
+		  .col_dl_i    (col_dl),                                              // OSD Load ROM (max 8MB)
+		  .col_wr_i    (ioctl_wr & col_dl),
+		  .col_adr_i   (ioctl_addr[22:0]),
+		  .col_dat_i   (ioctl_dout),                                              // ZEMMIX.ROM (YRW801) sent by the firmware
 		  .rom_wr_i    (ioctl_wr),
 		  .rom_dat_i   (ioctl_dout),
 		  .wave_ext_req_t  (wave_req_t),
@@ -1234,7 +1247,6 @@ assign vga_hs    = vga_v58b ? w58_hs : HSync;
 assign vga_vs    = vga_v58b ? w58_vs : VSync;
 `endif
 
-wire isVGA = status[2];
 
 mist_video #(
     .COLOR_DEPTH(8),
