@@ -69,7 +69,9 @@ entity megaram is
         ramadr22    : out   std_logic;
         -- ZEMMIX: Yamanooto mapper (Konami Neo-Ultimate Collection), 8 MB
         yam         : in    std_logic := '0';
-        colnew      : in    std_logic := '0'                -- a new image loaded: no erased sector
+        colnew      : in    std_logic := '0';               -- a new image loaded: no erased sector
+        -- ZEMMIX: ASCII16-X mapper (Grauw), 8 MB, all four pages
+        a16x        : in    std_logic := '0'
     );
 end megaram;
 
@@ -166,6 +168,25 @@ architecture rtl of megaram is
     signal YamSel       : std_logic_vector( 1 downto 0);
     signal YamDbi       : std_logic_vector( 7 downto 0);
     signal ColBank      : std_logic_vector( 9 downto 0);
+    signal ColMode      : std_logic;
+
+    -- ZEMMIX: ASCII16-X (grauw.nl/projects/ascii-x/ascii16-x), as the XL
+    -- 8 MB cartridge: 16 kB banks, page 1 (4000h) mirrored at C000h, page 2
+    -- (8000h) at 0000h; a write with A13 = 1 sets a bank register in any
+    -- page, A12 the page (6000h / 7000h and their mirrors), the bank D7-D0
+    -- with A8 (A9-A11 ignored, 512 banks).  Banks 0 at reset.  ZEMMIX, for
+    -- MEGALOAD: A11-A9 = 100 makes that page writable RAM (all its writes go
+    -- to the RAM, the registers through the other page), from the end of the
+    -- access (not 111: the slot expander test of the BIOS writes FFFFh).
+    -- The flash commands are not emulated.
+    signal A16Bank0     : std_logic_vector( 8 downto 0);
+    signal A16Bank1     : std_logic_vector( 8 downto 0);
+    signal A16Wr0       : std_logic;
+    signal A16Wr1       : std_logic;
+    signal A16Nw0       : std_logic;
+    signal A16Nw1       : std_logic;
+    signal A16Raw       : std_logic;
+    signal A16Sel       : std_logic_vector( 1 downto 0);
 
     -- ZEMMIX: the KUC DAC (Majutsushi, Synthesizer): 7FFFh bit 3, writes to
     -- 4000-5FFFh with A4 = 0, 8 bits unsigned, mixed with the SCC
@@ -259,14 +280,14 @@ begin
 
     -- Extended RAM address
     ramadr22            <=  ColBank(9);
-    RamAdr(21)          <=  ColBank(8)  when( kuc = '1' or yam = '1' )else
+    RamAdr(21)          <=  ColBank(8)  when( ColMode = '1' )else
                             '0'         when( mapsel /= "11" )else
                             '0'         when( xmr_ena = '0' )else
                             '0'         when( (SccBank0(7) = '1' or SccBank2(7) = '1' or SccBank3(7) = '1') and wrt = '1' )else
                             SccBank0(7) when( adr(14) = '1' )else
                             SccBank2(7); -- ( adr(14) = '0' );
 
-    RamAdr(20)          <=  ColBank(7)  when( kuc = '1' or yam = '1' )else
+    RamAdr(20)          <=  ColBank(7)  when( ColMode = '1' )else
                             '0'         when( xmr_ena = '0' and mapsel = "01" )else
                             '0'         when( (SccBank0(7) = '1' or SccBank2(7) = '1' or SccBank3(7) = '1') and wrt = '1' and mapsel = "01" )else
                             SccBankL    when( adr(14) = '1' and mapsel = "11" )else
@@ -279,13 +300,13 @@ begin
     -- Standard RAM address (MSB was fixed to '0' in 6000-7FFFh of the original module)
     RamAdr(19)          <=  -- SccModeA(6) when( adr(14 downto 13) /= "11" and mapsel(0) = '0' )else
                             -- '0'         when(                               mapsel(0) = '0' )else
-                            ColBank(6)  when( kuc = '1' or yam = '1' )else
+                            ColBank(6)  when( ColMode = '1' )else
                             SccBank0(6) when( adr(14 downto 13) = "10" )else
                             SccBank1(6) when( adr(14 downto 13) = "11" )else
                             SccBank2(6) when( adr(14 downto 13) = "00" )else
                             SccBank3(6); -- ( adr(14 downto 13) = "01" );
 
-    RamAdr(18 downto 0) <=  ColBank(5 downto 0) & adr(12 downto 0) when( kuc = '1' or yam = '1' )else
+    RamAdr(18 downto 0) <=  ColBank(5 downto 0) & adr(12 downto 0) when( ColMode = '1' )else
                             SccBank0(5 downto 0) & adr(12 downto 0) when( adr(14 downto 13) = "10" )else
                             SccBank1(5 downto 0) & adr(12 downto 0) when( adr(14 downto 13) = "11" )else
                             SccBank2(5 downto 0) & adr(12 downto 0) when( adr(14 downto 13) = "00" )else
@@ -362,15 +383,24 @@ begin
                 YamOfs           when( adr(1 downto 0) = "10" )else
                 YamEna;
 
-    -- the 8 kB bank of this page in the 8 MB (KUC / Yamanooto)
-    ColBank <=  KucReg(7 downto 6) & KucBank when( kuc = '1' )else
+    -- ASCII16-X decoder: the page of the access (A14 = 1: page 1), its raw
+    -- write; RAM for a read or a raw write, else a register (A13) or nothing
+    A16Raw  <=  A16Wr0 when( adr(14) = '1' )else A16Wr1;
+    A16Sel  <=  "01" when( wrt = '0' or A16Raw = '1' )else "00";
+
+    -- the 8 kB bank of this page in the 8 MB (KUC / Yamanooto / ASCII16-X)
+    ColMode <=  kuc or yam or a16x;
+    ColBank <=  A16Bank0 & adr(13) when( a16x = '1' and adr(14) = '1' )else
+                A16Bank1 & adr(13) when( a16x = '1' )else
+                KucReg(7 downto 6) & KucBank when( kuc = '1' )else
                 YBank0 when( adr(14 downto 13) = "10" )else
                 YBank1 when( adr(14 downto 13) = "11" )else
                 YBank2 when( adr(14 downto 13) = "00" )else
                 YBank3;
 
     -- SCC address decoder
-    SccSel  <=  KucSel when( kuc = '1' )else
+    SccSel  <=  A16Sel when( a16x = '1' )else
+                KucSel when( kuc = '1' )else
                 YamSel when( yam = '1' )else
             "10" when   -- memory access (scc_wave)
                         (adr(8) = '0' and SccModeB(4) = '0' and mapsel(0) = '0' and
@@ -436,8 +466,32 @@ begin
             YBank1      <= "00" & X"01";
             YBank2      <= "00" & X"02";
             YBank3      <= "00" & X"03";
+            A16Bank0    <= (others => '0');
+            A16Bank1    <= (others => '0');
+            A16Wr0      <= '0';
+            A16Wr1      <= '0';
+            A16Nw0      <= '0';
+            A16Nw1      <= '0';
         elsif( clk21m'event and clk21m = '1' )then
-            if( yam = '1' )then
+            if( a16x = '1' )then
+
+                -- ASCII16-X: a register write in any page that is not raw; the
+                -- raw (A11-A9 = 100) of a page changes once the access is over
+                if (req = '1' and wrt = '1' and A16Raw = '0' and adr(13) = '1') then
+                    if (adr(12) = '0') then
+                        A16Bank0 <= adr(8) & dbo;
+                        A16Nw0   <= adr(11) and not adr(10) and not adr(9);
+                    else
+                        A16Bank1 <= adr(8) & dbo;
+                        A16Nw1   <= adr(11) and not adr(10) and not adr(9);
+                    end if;
+                end if;
+                if (req = '0') then
+                    A16Wr0 <= A16Nw0;
+                    A16Wr1 <= A16Nw1;
+                end if;
+
+            elsif( yam = '1' )then
 
                 -- Yamanooto: not on a raw RAM write
                 if (req = '1' and wrt = '1' and YamSel /= "01" and
@@ -715,7 +769,7 @@ begin
     process( clk21m )
     begin
         if( clk21m'event and clk21m = '1' )then
-            if (kuc = '0' and yam = '0' and mapsel(0) = '0' and req = '1' and SccSel = "00" and wrt = '1' and
+            if (ColMode = '0' and mapsel(0) = '0' and req = '1' and SccSel = "00" and wrt = '1' and
                     adr(15 downto 13) = "011" and Dec1FFE = '1' and SccModeB(5 downto 4) = "00") then
                 KonMode <= dbo(5);
             end if;

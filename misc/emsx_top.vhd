@@ -178,6 +178,8 @@ entity emsx_top is
                                                                                 --   Collection, 8 MB at SDRAM 16 MB (ZEMMIX-58x.1)
         slot1_yam_i     : in    std_logic := '0';                               -- OSD: ... as a Yamanooto (Neo-Ultimate), its PSG
                                                                                 --   at 10h-11h too (ZEMMIX-58x.3)
+        slot1_a16x_i    : in    std_logic := '0';                               -- OSD: ... as an ASCII16-X (Grauw), 8 MB, all
+                                                                                --   four pages
         vdp_vmode_i     : in    std_logic_vector(  1 downto 0 ) := "00";        -- OSD Video Hz: 00 auto (R#9 / smart codes),
                                                                                 --   01 forced 60 Hz, 1x forced 50 Hz
         rtc_set_i       : in    std_logic := '0';                               -- MiST clock into the MSX RTC (ZEMMIX-0jv):
@@ -592,7 +594,8 @@ architecture RTL of emsx_top is
             kuc         : in    std_logic := '0';
             ramadr22    : out   std_logic;
             yam         : in    std_logic := '0';
-            colnew      : in    std_logic := '0'
+            colnew      : in    std_logic := '0';
+            a16x        : in    std_logic := '0'
         );
     end component;
 
@@ -1115,6 +1118,7 @@ architecture RTL of emsx_top is
     signal  Scc1Adr22       : std_logic;
     signal  Slot1Kuc        : std_logic;
     signal  Slot1Yam        : std_logic;
+    signal  Slot1A16        : std_logic;
     signal  Slot1Col        : std_logic;
     signal  Psg2On          : std_logic;
     signal  Scc1AmpL        : std_logic_vector( 14 downto 0 );
@@ -2622,6 +2626,7 @@ begin
                     '0';
     -- Slot1
     iSltScc1    <=  mem when( (w_prislt_dec(1) and (w_page_dec(1) or w_page_dec(2)) and (not iSlt1_linear)) = '1' and Scc1Type /= "00"          )else   -- 1   (4000-BFFFh)  2048 kB  ESE-SCC1
+                    mem when( (w_prislt_dec(1) and (w_page_dec(0) or w_page_dec(3)) and (not iSlt1_linear) and Slot1A16) = '1' )else   -- 1   (0000-3FFFh, C000-FFFFh) ASCII16-X mirrors
                     '0';
     iSltLin1    <=  mem when( (w_prislt_dec(1) and iSlt1_linear) = '1' and Scc1Type /= "00"                                                     )else   -- 1   (0000-FFFFh)    64 kB  Linear over ESE-SCC1
                     '0';
@@ -3530,12 +3535,13 @@ begin
     U31_1 : megaram
         port map(clk21m, reset, clkena, Scc1Req, Scc1Ack, wrt, adr, Scc1Dbi, dbo,
                         Scc1Ram, Scc1Wrt, Scc1Adr, RamDbi, open, Scc1Type, scc1_l, scc1_r, xmr_ena,
-                        Slot1Kuc, Scc1Adr22, Slot1Yam, col_dl_i);
+                        Slot1Kuc, Scc1Adr22, Slot1Yam, col_dl_i, Slot1A16);
 
-    -- KUC / Yamanooto: only with 32 MB of SDRAM (16-24 MB) and the MegaSCC+ in slot 1
+    -- KUC / Yamanooto / ASCII16-X: only with 32 MB of SDRAM (16-24 MB) and the MegaSCC+ in slot 1
     Slot1Kuc <= slot1_kuc_i and Slot1Mode when( SdrSize = "10" )else '0';
     Slot1Yam <= slot1_yam_i and Slot1Mode when( SdrSize = "10" )else '0';
-    Slot1Col <= Slot1Kuc or Slot1Yam;
+    Slot1A16 <= slot1_a16x_i and Slot1Mode when( SdrSize = "10" )else '0';
+    Slot1Col <= Slot1Kuc or Slot1Yam or Slot1A16;
     -- PSG2 (10h-13h): only as the PSG of a Yamanooto (before 58x.3 it was not
     -- built at all, so iPsg2_ena never did anything in ZEMMIX)
     Psg2On   <= Slot1Yam;
@@ -3545,7 +3551,7 @@ begin
     U31_2 : megaram
         port map(clk21m, reset, clkena, Scc2Req, Scc2Ack, wrt, adr, Scc2Dbi, dbo,
                         Scc2Ram, Scc2Wrt, Scc2Adr, RamDbi, open, Slot2Mode, scc2_l, scc2_r, xmr_ena,
-                        '0', open, '0', '0');
+                        '0', open, '0', '0', '0');
 
     U32 : eseopll
         port map(clk21m, reset, clkena, OpllEnaWait, OpllReq, OpllAck, wrt, adr, dbo, OpllWav);

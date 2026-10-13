@@ -8,6 +8,7 @@
 ;        MEGALOAD collection.ROM /C [/N]     the whole collection, its menu
 ;        MEGALOAD file.ROM /CK or /CY [/N]   any ROM for the KUC / Yamanooto
 ;                                            mapper (Pampas & Selene)
+;        MEGALOAD file.ROM /X [/N]           ASCII16-X (up to 8 MB)
 ;   /C  Konami Ultimate Collection (up to 8 MB) into slot 1 in its KUC mode
 ;       (OSD Slot1 MegaSCC+ 2MB and Slot1 ROM type KUC 8MB; 32 MB SDRAM):
 ;       the cartridge as it is, with its menu
@@ -16,7 +17,11 @@
 ;       cores from 2026-10-11), up to 2 MB
 ;   /A  ASCII 8 kB: slot 2 (OSD Slot2 MegaRAM 1MB/1MB), up to 1 MB
 ;   /1  ASCII 16 kB: slot 2 (OSD Slot2 MegaRAM 2MB/2MB), up to 2 MB
+;   /X  ASCII16-X (Grauw), also ASCII 16 kB ROMs over 2 MB: slot 1 (OSD
+;       Slot1 MegaSCC+ 2MB and Slot1 ROM type ASCII16-X 8MB; 32 MB SDRAM),
+;       up to 8 MB.  Chosen by itself for a ROM with "ASCII16X" at 0010h.
 ;   /N  load only, back to DOS
+; A ROM larger than its mapper is refused ("ROM too big"), not cut.
 ; Without /K /4 /A /1 the mapper is guessed from the LD (nnnn),A of the
 ; ROM to the bank registers (as openMSX does).  MEGALOAD never changes the
 ; ROM.
@@ -36,6 +41,9 @@
 ;   ASCII   a bank with bit 7 = 1 is writable; 7000h = 8 kB bank of 8000h
 ;           (ASCII 8) or 16 kB bank of 8000h-BFFFh (ASCII 16, bit 6 = bit 6
 ;           of the bank)
+;   ASCII16-X  a bank register write with A11-A9 = 100 (7800h / 7900h,
+;           bank bit 8 in A8) makes that page writable RAM, until the next
+;           write of its register
 ; Before loading, the slot is checked: two banks written and read back.
 ; When loading into slot 2 a ROM left in the MegaSCC+ of slot 1 would boot
 ; first, so its "AB" is cleared (only if slot 1 is RAM).
@@ -134,7 +142,12 @@ opn:    ld a,(opt+1)
         ld a,1
         ld (noboot),a
         jp opts
-op0:
+op0:    cp 'X'
+        jr nz,op1
+        ld a,3                  ; /X: ASCII16-X, the whole ROM into slot 1
+        ld (cmode),a
+        ld (cforce),a
+        jp opts
 op1:    ld b,T_SCC
         cp 'K'
         jr z,op2
@@ -175,7 +188,15 @@ opend:  ld de,fname
 nodsk:
         ld a,(rtype)
         or a
-        call z,guess
+        jr nz,nodsk1
+        call isa16x             ; "ASCII16X" at 0010h: /X
+        jr nz,nodsk0
+        ld a,3
+        ld (cmode),a
+        ld (cforce),a
+        jp cfull
+nodsk0: call guess
+nodsk1:
 nodsk2: ld a,(rtype)
         or a
         jp z,unknown
@@ -246,7 +267,7 @@ blk0:   ld a,(handle)           ; next 8 kB
         call BDOS
         ld a,h
         or l
-        jr z,loaded
+        jp z,loaded
         ld (count),hl
         ld a,(maxblk)           ; too big?
         or a
@@ -296,6 +317,15 @@ blk4:   call ram
         inc a
         ld (block),a
         jp nz,blk
+        ld a,(handle)           ; 256 blocks (2 MB): more in the file?
+        ld b,a
+        ld de,BUF
+        ld hl,2000h
+        ld c,48h                ; _READ
+        call BDOS
+        ld a,h
+        or l
+        jp nz,toobig
 
 loaded: ld a,(handle)
         ld b,a
@@ -1145,6 +1175,9 @@ cfl:    ld a,(handle)           ; back to the start of the file
         ld a,(ckind)
         cp 2
         jr z,cfl0a
+        ld de,m_a16l
+        cp 3
+        jr z,cfl0a
         ld de,m_yaml
 cfl0a:  call puts
         call kucprb
@@ -1152,6 +1185,9 @@ cfl0a:  call puts
         ld de,m_nokuc
         ld a,(ckind)
         cp 2
+        jp z,puts
+        ld de,m_noa16
+        cp 3
         jp z,puts
         ld de,m_noyam
         jp puts
@@ -1194,7 +1230,15 @@ cfl9:   ld a,(handle)
         or a
         jp z,ferr
         call cart               ; registers as at power on
-        ld a,1                  ; Yamanooto: REGEN for 7FFD-7FFEh
+        ld a,(ckind)
+        cp 3
+        jr nz,cfl9y
+        xor a                   ; ASCII16-X: banks 0, not writable
+        ld (6000h),a
+        ld (7000h),a
+        call ram
+        jp ld3
+cfl9y:  ld a,1                  ; Yamanooto: REGEN for 7FFD-7FFEh
         ld (7FFFh),a
         xor a
         ld (7FFDh),a
@@ -1214,6 +1258,8 @@ cfl9:   ld a,(handle)
 
 ; HL = block: BUF (count bytes) into it (cartridge in pages 1-2)
 kwblk:  ld a,(ckind)
+        cp 3
+        jr z,xwblk
         cp 2
         jr nz,ywblk
         ld a,h                  ; A21-A20 in bits 7-6
@@ -1265,7 +1311,66 @@ yset:   ld a,1                  ; REGEN
         ld (5000h),a
         ret
 ; HL = block: A = its first byte
+; ASCII16-X: 8 kB block HL = 16 kB bank HL / 2 (9 bits), its half by bit 0;
+; page 2 at that bank, writable (7800h + bank bit 8 * 100h), back with 7000h
+xwblk:  ld a,78h
+        call xbank
+        ld de,8000h
+        bit 0,l
+        jr z,xw1
+        ld de,0A000h
+xw1:    call copy
+        xor a
+        ld (7000h),a
+        ret
+xrblk:  ld a,70h
+        call xbank
+        ld a,(8000h)
+        bit 0,l
+        ret z
+        ld a,(0A000h)
+        ret
+; write bank HL / 2 to register A * 100h (+ 100h for bank bit 8)
+xbank:  bit 1,h
+        jr z,xb1
+        inc a
+xb1:    ld d,a
+        ld e,0
+        ld a,h
+        rra
+        ld a,l
+        rra
+        ld (de),a
+        ret
+
+; Z if the file has "ASCII16X" at 0010h (back to its start)
+isa16x: ld a,(handle)
+        ld b,a
+        ld de,BUF
+        ld hl,20h
+        ld c,48h                ; _READ
+        call BDOS
+        ld a,(handle)
+        ld b,a
+        ld de,0
+        ld hl,0
+        xor a
+        ld c,4Ah                ; _SEEK to 0
+        call BDOS
+        ld hl,BUF+10h
+        ld de,m_a16id
+        ld b,8
+isa1:   ld a,(de)
+        cp (hl)
+        ret nz
+        inc hl
+        inc de
+        djnz isa1
+        ret
+
 krblk:  ld a,(ckind)
+        cp 3
+        jr z,xrblk
         cp 2
         jr z,krk
         call yset
@@ -1301,7 +1406,12 @@ kucprb: ld hl,1
         ld hl,300h
         call kwblk
         ld a,(ckind)
-        cp 2
+        cp 3
+        jr nz,kpk
+        ld hl,1                 ; ASCII16-X: block 1 as it is
+        call krblk
+        jr kpy1
+kpk:    cp 2
         jr nz,kpy
         xor a                   ; KUC: bank 0, offset 1: block 1
         ld (7FFFh),a
@@ -1323,13 +1433,20 @@ kpy1:   ld (pr_1),a
         ld hl,300h
         call krblk
         ld (pr_2),a
-        ld a,1
+        ld a,(ckind)
+        cp 3
+        jr nz,kpy2
+        xor a                   ; ASCII16-X: banks 0
+        ld (6000h),a
+        ld (7000h),a
+        jr kpy3
+kpy2:   ld a,1
         ld (7FFFh),a
         xor a
         ld (7FFDh),a
         ld (7FFEh),a
         ld (7FFFh),a
-        call ram
+kpy3:   call ram
         ld a,(pr_1)
         cp 5Ah
         ret nz
@@ -1483,10 +1600,10 @@ gpos:   db 0
 gtype:  db 0
 clim:   db 0                    ; blocks to load (collection game), 0 = all
 mirror: db 0                    ; 1: 16 kB game, 2: 8 kB game
-ckind:  db 0                    ; 1 Neo-Ultimate, 2 KUC
+ckind:  db 0                    ; 1 Neo-Ultimate, 2 KUC, 3 ASCII16-X
 glim:   db 0                    ; guess: blocks + 1, 0 = the whole file
 kblk:   dw 0                    ; /C: block being loaded
-cforce: db 0                    ; /CK 2, /CY 1
+cforce: db 0                    ; /CK 2, /CY 1, /X 3
 khi:    db 0
 gidx:   db 0
 nsz:    db 0
@@ -1507,10 +1624,11 @@ s_a8:   dw 0
 s_a16:  dw 0
 s_kon:  dw 0
 m_title: db "MEGALOAD: MegaROM as it is into the ZEMMIX cartridge RAM",13,10,'$'
-m_usage: db "Usage: MEGALOAD file.ROM [/K|/4|/A|/1] [/N]",13,10
+m_usage: db "Usage: MEGALOAD file.ROM [/K|/4|/A|/1|/X] [/N]",13,10
          db " /K Konami SCC (slot 1)  /4 Konami (slot 1)",13,10
          db " /A ASCII 8 (slot 2 MegaRAM 1MB/1MB)",13,10
          db " /1 ASCII 16 (slot 2 MegaRAM 2MB/2MB)  /N no reboot",13,10
+         db " /X ASCII16-X or ASCII 16 over 2 MB (slot 1)",13,10
          db "Collections: /L list, /G:n load game n,",13,10
          db " /C all (its menu); /CK /CY any ROM",13,10
          db " in KUC / Yamanooto mode",13,10,'$'
@@ -1525,6 +1643,11 @@ m_notcoll: db "Not a known collection.",13,10,'$'
 m_kucl:  db "Whole collection, slot 1 KUC mode",13,10,'$'
 m_onlykuc: db "/C: not a known collection.",13,10,'$'
 m_yaml:  db "Whole collection, slot 1 Yamanooto mode",13,10,'$'
+m_a16l:  db "ASCII16-X, slot 1",13,10,'$'
+m_noa16: db "Slot 1 is not in ASCII16-X mode. In the OSD set",13,10
+         db " Slot1 = MegaSCC+ 2MB, Slot1 ROM type = ASCII16-X 8MB",13,10
+         db " (32 MB SDRAM, cores from 2026-10-13).",13,10,'$'
+m_a16id: db "ASCII16X"
 m_noyam: db "Slot 1 is not in Yamanooto mode. In the OSD set",13,10
          db " Slot1 = MegaSCC+ 2MB, Slot1 ROM type = Yamanooto 8MB",13,10
          db " (32 MB SDRAM, cores from 2026-10-12).",13,10,'$'
