@@ -1,10 +1,15 @@
 ; V99MODE.COM: V9990 (GFX9000) bitmap mode test for ZEMMIX, MSX-DOS.
 ; Assemble: pasmo V99MODE.ASM V99MODE.COM
 ;
-; The same 16 colour picture (image 1024 wide, 256 lines) in the bitmap
+; The same 16 colour picture (image 1024 wide, 512 lines) in the bitmap
 ; modes one after the other, a key for the next one:
 ;   B1 256x212, B3 512x212, B7 1024x212, B0 256x240, B2 384x240, B4 768x240
-; (R#6 DCKM 0 / 1 / 2, P#7 MCS 0: B1 / B3 / B7, MCS 1: B0 / B2 / B4).
+;   B5 640x400 (25 kHz), B6 640x480 (31 kHz), each with R#6 DCKM 2 (the
+;   table of 8.3 of the Application Manual) and DCKM 3 (its sample
+;   software), name "B5 640m" / "B6 640m" for the latter
+; (R#6 DCKM 0 / 1 / 2, P#7 MCS 0: B1 / B3 / B7, MCS 1: B0 / B2 / B4;
+; R#7 HSCN: B5, HSCN + C25M: B6).  The palette is loaded at 0-15 and
+; 32-47: the odd pixels of B4 / B7 / B5 / B6 take colour + 32.
 ; Picture: a white grid every 8 pixels / lines; inside the cells, left half
 ; columns 1 on / 1 off (blue), right half lines 1 on / 1 off (red); yellow
 ; bars in the top left cell.  The mode name (B1 ... B4) in big yellow
@@ -34,9 +39,16 @@ start:  ld de,m_title
         out (P_RSEL),a
         xor a
         out (P_RDATA),a
-        ld hl,pal
+        ld hl,pal               ; 0-15, 16-31 black, 32-47 the same
         ld b,16*3
         ld c,P_PAL
+        otir
+        ld b,16*3
+        xor a
+pal1:   out (P_PAL),a
+        djnz pal1
+        ld hl,pal
+        ld b,16*3
         otir
         ; R#13 palette control 0, R#15 backdrop 0, R#16 adjust 0, scroll 0
         ld hl,init
@@ -53,7 +65,7 @@ ini2:   ld a,6                  ; bitmap mode first: the CPU addresses of
         out (P_RSEL),a          ; the VRAM depend on it (bitmap: even and
         ld a,89h                ; odd bytes in the two halves)
         out (P_RDATA),a
-        ; picture: 256 lines of 512 bytes (1024 pixels, 4 bpp) from VRAM 0
+        ; picture: 512 lines of 512 bytes (1024 pixels, 4 bpp) from VRAM 0
         xor a                   ; R#0-R#2 = 0
         out (P_RSEL),a
         out (P_RDATA),a
@@ -70,15 +82,16 @@ pic1:   ld (y),hl
         ld hl,(y)
         inc hl
         ld a,h
-        or a
-        jr z,pic1               ; 256 lines
+        cp 2
+        jr nz,pic1              ; 512 lines
 
         ld hl,modes
-        ld b,6
+        ld b,10
 mod1:   push bc
         push hl
         push hl
         inc hl                  ; the digit of the name: "Bn ..."
+        inc hl
         inc hl
         inc hl
         ld a,(hl)
@@ -89,9 +102,14 @@ mod1:   push bc
         inc hl
         ld a,(hl)               ; MCS
         out (P_SYS),a
-        ld a,6
+        inc hl
+        ld a,6                  ; R#6, R#7
         out (P_RSEL),a
         ld a,e
+        out (P_RDATA),a
+        ld a,7
+        out (P_RSEL),a
+        ld a,(hl)
         out (P_RDATA),a
         ld a,8                  ; display on
         out (P_RSEL),a
@@ -103,21 +121,15 @@ mod1:   push bc
         ld c,08h                ; wait for a key
         call BDOS
         pop hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
-        inc hl
+        ld de,13                ; next entry
+        add hl,de
         pop bc
         djnz mod1
-        ld a,8                  ; display off, MCS 0
+        ld a,7                  ; R#7 0 (no high scan), display off, MCS 0
+        out (P_RSEL),a
+        xor a
+        out (P_RDATA),a
+        ld a,8
         out (P_RSEL),a
         xor a
         out (P_RDATA),a
@@ -151,7 +163,10 @@ pixel:  ld a,e                  ; grid: x and 7 = 0 or y and 7 = 0
         ld a,(y)
         and 7
         jr z,px_w
-        ld a,(y)                ; mode mark: lines 2-5, x 2..2+2*n
+        ld a,(y+1)              ; mode mark: lines 2-5, x 2..2+2*n
+        or a
+        jr nz,px1
+        ld a,(y)
         cp 2
         jr c,px1
         cp 6
@@ -272,13 +287,17 @@ pal:    db 0,0,0, 0,0,31, 31,0,0, 31,31,0
 init:   db 7,00h, 9,00h, 13,00h, 15,00h, 16,00h
         db 17,00h, 18,00h, 19,00h, 20,00h, 21,00h, 22,00h, 23,00h, 24,00h
         db 0FFh
-; R#6, P#7, name (10 bytes, '$'); the digit of the name is byte 3
-modes:  db 89h,0, "B1 256 ",13,10,'$'
-        db 99h,0, "B3 512 ",13,10,'$'
-        db 0A9h,0,"B7 1024",13,10,'$'
-        db 89h,1, "B0 256o",13,10,'$'
-        db 99h,1, "B2 384o",13,10,'$'
-        db 0A9h,1,"B4 768o",13,10,'$'
+; R#6, P#7, R#7, name (10 bytes, '$'); the digit of the name is byte 4
+modes:  db 89h,0,0,   "B1 256 ",13,10,'$'
+        db 99h,0,0,   "B3 512 ",13,10,'$'
+        db 0A9h,0,0,  "B7 1024",13,10,'$'
+        db 89h,1,0,   "B0 256o",13,10,'$'
+        db 99h,1,0,   "B2 384o",13,10,'$'
+        db 0A9h,1,0,  "B4 768o",13,10,'$'
+        db 0A9h,0,01h,"B5 640 ",13,10,'$'
+        db 0A9h,0,41h,"B6 640 ",13,10,'$'
+        db 0B9h,0,01h,"B5 640m",13,10,'$'
+        db 0B9h,0,41h,"B6 640m",13,10,'$'
 m_title: db "V9990 bitmap modes: a key for the next one.",13,10,'$'
 m_end:   db "Done.",13,10,'$'
 ; 3 x 5 font, bit 2 = left: digits 0-9 then 'B'
