@@ -395,7 +395,7 @@ wire        v99_reset_n, v99_req, v99_wrt, v99_ack, v99_int_n;
 wire  [3:0] v99_adr;
 wire  [7:0] v99_dbo, v99_dbi;
 wire  [7:0] v99_red, v99_grn, v99_blu;
-wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp, v99_il;
+wire        v99_hsync_n, v99_vsync_n, v99_hblank, v99_vblank, v99_disp, v99_il, v99_hscan;
 
 `ifdef V9990
 wire        v99_vram_req, v99_vram_we;
@@ -481,6 +481,7 @@ v9990_core v9990
 	.vblank_o     ( v99_vblank      ),
 	.interlace_o  ( v99_il          ),
 	.disp_en_o    ( v99_disp        ),
+	.hscan_o      ( v99_hscan       ),
 	.vid_x_o      (                 ),
 	.vid_y_o      (                 )
 );
@@ -1164,7 +1165,7 @@ wire        v58_bl_o = v58_wv ? w58_blank : blank;
 
 `ifdef V9990
 reg   [7:0] v99_r, v99_g, v99_b;
-reg         v99_hs, v99_vs, v99_blank, v99_on, v99_ils, v99_wv, v99_fld;
+reg         v99_hs, v99_vs, v99_blank, v99_on, v99_ils, v99_wv, v99_fld, v99_hsc;
 
 // the field: EO of the V9990 (v9990_cpu), 0 after its reset and flipped at
 // every frame start, when its vsync begins
@@ -1176,6 +1177,7 @@ always @(posedge clk_v99) begin
 	v99_vs    <= v99_vsync_n;
 	v99_blank <= v99_hblank | v99_vblank;
 	v99_on    <= v99_disp;
+	v99_hsc   <= v99_hscan;
 	v99_ils   <= v99_il;
 	if (v99_vs & ~v99_vsync_n) begin
 		v99_fld <= ~v99_fld;
@@ -1206,15 +1208,18 @@ v99_bob #(.LINE(1368), .HS(100)) v99_bob
 	.blank_out ( wv_blank   )
 );
 
+// High scan B5 / B6 (R#7 HSCN): the V9990 gives 25 / 31 kHz lines itself
+// (1696 / 1365 clk_v99): no scandoubler, its signals as they are (in
+// bypass mist_video passes every clk_v99, the 1-2 clock pixels of B6 too)
 wire vid_v99 = status[14:13] == 2'd2 || (status[14:13] == 2'd0 && v99_on);
-assign vid_byp = vid_v99 ? v99_wv : v58_wv;    // HDMI: always 31 kHz
+assign vid_byp = vid_v99 ? (v99_wv | v99_hsc) : v58_wv;    // HDMI: always 31 kHz
 
-assign vid_r     = ~vid_v99 ? v58_r_o  : vid_byp ? wv_r     : v99_r;
-assign vid_g     = ~vid_v99 ? v58_g_o  : vid_byp ? wv_g     : v99_g;
-assign vid_b     = ~vid_v99 ? v58_b_o  : vid_byp ? wv_b     : v99_b;
-assign vid_hs    = ~vid_v99 ? v58_hs_o : vid_byp ? wv_hs    : v99_hs;
-assign vid_vs    = ~vid_v99 ? v58_vs_o : vid_byp ? wv_vs    : v99_vs;
-assign vid_blank = ~vid_v99 ? v58_bl_o : vid_byp ? wv_blank : v99_blank;
+assign vid_r     = ~vid_v99 ? v58_r_o  : v99_wv ? wv_r     : v99_r;
+assign vid_g     = ~vid_v99 ? v58_g_o  : v99_wv ? wv_g     : v99_g;
+assign vid_b     = ~vid_v99 ? v58_b_o  : v99_wv ? wv_b     : v99_b;
+assign vid_hs    = ~vid_v99 ? v58_hs_o : v99_wv ? wv_hs    : v99_hs;
+assign vid_vs    = ~vid_v99 ? v58_vs_o : v99_wv ? wv_vs    : v99_vs;
+assign vid_blank = ~vid_v99 ? v58_bl_o : v99_wv ? wv_blank : v99_blank;
 
 `ifdef USE_HDMI
 wire vga_v99 = ~vid_v99;                        // VGA: the other screen
@@ -1223,13 +1228,14 @@ wire vga_v99 = vid_v99;
 `endif
 // VGA: not with 15 kHz RGB (then the 15 kHz picture as it is)
 wire vga_v58b = v58_wv & ~scandoubler_disable;
-assign vga_byp = vga_v99 ? (v99_wv & ~scandoubler_disable) : vga_v58b;
+wire vga_v99b = v99_wv & ~scandoubler_disable;            // the V9990 bobbed
+assign vga_byp = vga_v99 ? (vga_v99b | v99_hsc) : vga_v58b;
 
-assign vga_r     = ~vga_v99 ? (vga_v58b ? w58_r  : R_O)   : vga_byp ? wv_r  : v99_r;
-assign vga_g     = ~vga_v99 ? (vga_v58b ? w58_g  : G_O)   : vga_byp ? wv_g  : v99_g;
-assign vga_b     = ~vga_v99 ? (vga_v58b ? w58_b  : B_O)   : vga_byp ? wv_b  : v99_b;
-assign vga_hs    = ~vga_v99 ? (vga_v58b ? w58_hs : HSync) : vga_byp ? wv_hs : v99_hs;
-assign vga_vs    = ~vga_v99 ? (vga_v58b ? w58_vs : VSync) : vga_byp ? wv_vs : v99_vs;
+assign vga_r     = ~vga_v99 ? (vga_v58b ? w58_r  : R_O)   : vga_v99b ? wv_r  : v99_r;
+assign vga_g     = ~vga_v99 ? (vga_v58b ? w58_g  : G_O)   : vga_v99b ? wv_g  : v99_g;
+assign vga_b     = ~vga_v99 ? (vga_v58b ? w58_b  : B_O)   : vga_v99b ? wv_b  : v99_b;
+assign vga_hs    = ~vga_v99 ? (vga_v58b ? w58_hs : HSync) : vga_v99b ? wv_hs : v99_hs;
+assign vga_vs    = ~vga_v99 ? (vga_v58b ? w58_vs : VSync) : vga_v99b ? wv_vs : v99_vs;
 `else
 assign vid_byp   = v58_wv;
 assign vid_r     = v58_r_o;
