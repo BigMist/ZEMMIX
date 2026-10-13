@@ -1,6 +1,6 @@
 """The collection modes of megaram.vhd: MEGALOAD /C loading, then what the
 menus of the cartridges do to start a game (openMSX KonamiUltimateCollection
-and Yamanooto)."""
+and Yamanooto); ASCII16-X (Grauw's specification, openMSX RomAscii16X)."""
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ReadOnly, FallingEdge
@@ -53,11 +53,12 @@ class Bus:
         return await self.acc(adr, 0)
 
 
-async def setup(dut, kuc, yam):
+async def setup(dut, kuc, yam, a16x=0):
     cocotb.start_soon(Clock(dut.clk21m, 10, "ns").start())
     cocotb.start_soon(ram_model(dut))
     dut.kuc.value = kuc
     dut.yam.value = yam
+    dut.a16x.value = a16x
     dut.mapsel.value = 0b10          # slot 1: SCC+ (mapsel(0) = 0)
     dut.xmr_ena.value = 0
     dut.clkena.value = 1
@@ -280,3 +281,76 @@ async def kuc_dac(dut):
     await b.wr(0x4010, 0x11)                     # A4 = 1: not the DAC
     assert int(dut.KucDac.value) == 0xC0
     dut._log.info("KUC DAC: ok")
+
+
+A16_BANKS = [0, 1, 0x7F, 0x80, 0xAF, 0xC0, 0xFF, 0x100, 0x1A5, 0x1FF]
+
+
+def a16(b, off):
+    return b * 0x4000 + off
+
+
+@cocotb.test()
+async def ascii16x(dut):
+    """ASCII16-X: the ZEMMIX raw write (A11) for MEGALOAD, then a game: banks
+    0 at reset, 6000h / 7000h and the mirrors in the four pages, A8 as bank
+    bit 8, the page mirrors at 0000h / C000h."""
+    MEM.clear()
+    b = await setup(dut, 0, 0, 1)
+    # loading: 7800h + (bank >> 8) * 100h = bank & FFh (page 2 raw), data, 7000h = 0
+    for bk in A16_BANKS:
+        await b.wr(0x7800 | ((bk >> 8) << 8), bk & 0xFF)
+        assert not b.ramacc, "the raw register write went to the RAM"
+        for off in (0x0000, 0x1FFF, 0x2000, 0x3000, 0x3FFF):   # 2000-3FFFh: the RAM, not a register
+            await b.wr(0x8000 + off, pat(bk, off))
+            assert b.ramacc, f"raw write {0x8000 + off:04x} not to the RAM"
+        await b.wr(0x7000, 0)
+        assert not b.ramacc
+    for bk in A16_BANKS:
+        for off in (0x0000, 0x1FFF, 0x2000, 0x3000, 0x3FFF):
+            assert MEM.get(a16(bk, off)) == pat(bk, off), f"bank {bk:x} offset {off:x}"
+    await b.wr(0x8000, 0x99)                     # not raw any more
+    assert not b.ramacc, "a write to 8000h after the load went to the RAM"
+    # a reset: both pages bank 0
+    dut.reset.value = 1
+    for _ in range(3):
+        await RisingEdge(dut.clk21m)
+    dut.reset.value = 0
+    assert await b.rd(0x4000) == pat(0, 0) and await b.rd(0x8000) == pat(0, 0), "banks 0 at reset"
+    # the game: 7000h page 2, 6000h page 1
+    await b.wr(0x7000, 0xAF)
+    assert await b.rd(0x8000) == pat(0xAF, 0) and await b.rd(0xBFFF) == pat(0xAF, 0x3FFF)
+    assert await b.rd(0x0000) == pat(0xAF, 0), "page 2 mirror at 0000h"
+    await b.wr(0x60FF, 0xC0)
+    assert await b.rd(0x4000) == pat(0xC0, 0) and await b.rd(0xE000) == pat(0xC0, 0x2000), "page 1, mirror C000h"
+    # A8: bank bit 8; A9-A10 ignored
+    await b.wr(0x7100, 0xA5)
+    assert await b.rd(0x9FFF) == pat(0x1A5, 0x1FFF), "bank 1A5h (A8)"
+    await b.wr(0x7600, 0x7F)
+    assert await b.rd(0x8000) == pat(0x7F, 0), "A9-A10 ignored"
+    # register mirrors: 2000h / A000h / E000h page 1, 3000h / B000h / F000h page 2
+    for adr, page, bk in ((0x2000, 1, 0x80), (0xA0FF, 1, 0xFF), (0xE000, 1, 0x01),
+                          (0x30FF, 2, 0x100), (0xB000, 2, 0xC0), (0xF7FF, 2, 0x1FF)):
+        await b.wr(adr | ((bk >> 8) << 8), bk & 0xFF)
+        assert not b.ramacc
+        rd = 0x4000 if page == 1 else 0x8000
+        assert await b.rd(rd) == pat(bk, 0), f"register at {adr:04x}: page {page} bank {bk:x}"
+    # a write with A13 = 0 does nothing
+    await b.wr(0x9000, 0x12)
+    assert not b.ramacc
+    assert await b.rd(0x8000) == pat(0x1FF, 0)
+    # raw page 2: its own register range is RAM too, the bank stays
+    await b.wr(0x7801, 0x80)
+    await b.wr(0xB000, 0x55)
+    assert b.ramacc and MEM.get(a16(0x80, 0x3000)) == 0x55, "raw B000h to the RAM"
+    assert await b.rd(0x8000) == pat(0x80, 0), "raw B000h changed the bank"
+    await b.wr(0x7000, 0x80)
+    await b.wr(0xB000, 0x01)
+    assert not b.ramacc and await b.rd(0x8000) == pat(1, 0), "B000h a register again"
+    # the BIOS slot expander test (FFFFh, A11-A9 = 111): a bank, not raw
+    await b.wr(0xFFFF, 0xA5)
+    assert not b.ramacc
+    await b.wr(0x8000, 0x00)
+    assert not b.ramacc, "FFFFh made page 2 raw"
+    assert await b.rd(0x8000) == pat(0x1A5, 0), "FFFFh: bank 1A5h"
+    dut._log.info("ASCII16-X: raw loading, reset, registers, mirrors, A8: ok")

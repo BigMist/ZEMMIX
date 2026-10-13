@@ -216,7 +216,7 @@ localparam CONF_STR = {
 	"ZEMMIX;;",
 	"S0U,IMGVHD,Load virtual disk;",
 	"F2,ROM,Load ROM (max 8MB);",                       // data_io index 2: to SDRAM 16 MB, the MSX in reset (0 = ZEMMIX.ROM)
-	"OIJ,Slot1 ROM type,MegaSCC+,KUC 8MB,Yamanooto 8MB;",   // the MegaSCC+ of slot 1 or a collection mapper (8 MB at SDRAM 16 MB)
+	"OIJ,Slot1 ROM type,MegaSCC+,KUC 8MB,Yamanooto 8MB,ASCII16-X 8MB;",   // the MegaSCC+ of slot 1 or a collection mapper (8 MB at SDRAM 16 MB)
 	"-;",
 	"P1,DIP Settings;",
 	"P1O1,CPU Clock,Standard,Turbo;",
@@ -926,6 +926,7 @@ emsx_top #(
 		  .vdp_gamma_i(status[15]),    // OSD Palette: 0 = V9968 colours, 1 = openMSX
 		  .slot1_kuc_i(status[19:18] == 2'd1),   // OSD Slot1 ROM type KUC 8MB
 		  .slot1_yam_i(status[19:18] == 2'd2),   // OSD Slot1 ROM type Yamanooto 8MB
+		  .slot1_a16x_i(status[19:18] == 2'd3),  // OSD Slot1 ROM type ASCII16-X 8MB
 		  .vdp_vmode_i(status[17:16]), // OSD Video Hz: 0 Auto (R#9 / SETSMART), 1 60 Hz, 2 50 Hz
 		  .rtc_set_i  (rtc_set),       // MiST clock into the MSX RTC
 		  .rtc_i      (mist_rtc),
