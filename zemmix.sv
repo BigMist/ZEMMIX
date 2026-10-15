@@ -965,6 +965,7 @@ emsx_top #(
 		  .scc2_l      (scc2_l),
 		  .scc2_r      (scc2_r),
 		  .TrPcm_o     (TrPcm_o),
+		  .TrPcmMute_o (pcm_mute),
 		  .psg_o       (psg_o),
 		  .vol_o       (vol_o),
 		  .PsgVol_o    (psg_vol),
@@ -1004,6 +1005,7 @@ reg signed [14:0] scc1_l;
 reg signed [14:0] scc2_r;
 reg signed [14:0] scc2_l;
 reg signed [7:0] TrPcm_o;
+wire pcm_mute;                       // turbo R A5h MUTE (PAUSE key): every source
 reg [15:0] psg_o;
 
 wire [2:0] vol_o, psg_vol, scc_vol, opll_vol;
@@ -1034,6 +1036,7 @@ audio_mix audio_mix
  .scc2_r   (scc2_r),
  .psg      (psg_o),
  .pcm      (TrPcm_o),
+ .mute     (pcm_mute),
  .tape_en  (status[9]),
  .tape_in  (tape_in),
  .psg_vol  (psg_vol),

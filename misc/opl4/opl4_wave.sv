@@ -33,7 +33,8 @@ module opl4_wave
     parameter          CE_INC  = 24'd10584,     // 33.8688 MHz / 50 MHz = 10584 / 15625
     parameter          CE_MOD  = 24'd15625,
     parameter          RD_MAX  = 7'd100,        // longest wait of an IN 7Fh in clk_bus cycles (4.7 us)
-    parameter          LINE_RD = 0              // 1: a read of the wave memory gives 4 words (8 bytes, adr 8-aligned)
+    parameter          LINE_RD = 0,             // 1: a read of the wave memory gives 4 words (8 bytes, adr 8-aligned)
+    parameter          DBG_REGS = 0             // 1: regs F0h-F7h / FAh-FFh read back the diagnostics below
 )
 (
     input  wire        clk_bus,
@@ -57,7 +58,8 @@ module opl4_wave
     output reg   [7:0] mem_wdat,
     input  wire [63:0] mem_rdat,                // a line of 4 words with LINE_RD (word 0 in 15-0)
 
-    // diagnostics of the ZEMMIX.ROM load (clk_bus), read on regs F0h-F3h and FAh-FFh
+    // diagnostics of the ZEMMIX.ROM load (clk_bus), read on regs F0h-F3h and FAh-FFh with
+    // DBG_REGS only: F0h-F7h are the AM bits of channels 17-24 on the YMF278B
     input  wire [23:0] dbg_wr,                  // F0h-F2h: bytes written to the wave memory
     input  wire  [7:0] dbg_flags,               // F3h
     input  wire [23:0] dbg_rcv,                 // FAh-FCh: bytes received
@@ -246,8 +248,8 @@ reg  [1:0] st_s0 = 2'b00;
 reg  [1:0] qb_s = 2'b00;                        // queue busy
 reg  [7:0] idx_b = 0;                           // last index written to 7Eh
 reg        wr4_d = 0;
-// diagnostics (regs F4h-F7h of 7Eh / 7Fh): FIFO empty while playing / full (since
-// reset), counted in the audio part below
+// diagnostics (regs F4h-F7h of 7Eh / 7Fh with DBG_REGS): FIFO empty while playing / full
+// (since reset), counted in the audio part below
 reg  [15:0] sf_unf = 0, sf_ovf = 0;
 reg  [7:0] dbg_q;
 always @(*) begin
@@ -261,7 +263,7 @@ always @(*) begin
         default: dbg_q = 8'h00;
     endcase
 end
-wire       idx_dbg = (idx_b[7:4] == 4'hF) && (idx_b[3:0] <= 4'h7 || idx_b[3:0] >= 4'hA);
+wire       idx_dbg = DBG_REGS && (idx_b[7:4] == 4'hF) && (idx_b[3:0] <= 4'h7 || idx_b[3:0] >= 4'hA);
 always @(posedge clk_bus) begin
     rdd_s  <= {rdd_s[1:0], rd_done_t};
     wr4_d  <= bus_cs && !bus_wr_n && bus_a == 3'd4;

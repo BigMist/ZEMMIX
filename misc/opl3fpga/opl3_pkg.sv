@@ -94,12 +94,15 @@ package opl3_pkg;
     localparam BANK_NUM_WIDTH = $clog2(NUM_BANKS);
     localparam OP_NUM_WIDTH = $clog2(NUM_OPERATORS_PER_BANK);
 
-    localparam TIMER1_TICK_INTERVAL = 80e-6;  // in seconds
-    localparam TIMER2_TICK_INTERVAL = 320e-6; // in seconds
-    // ZEMMIX: the same in clk cycles, as integers (CLK_FREQ * interval with reals is
-    // not computed right by every tool: MoonTANG saw a timer 30 times too slow on Gowin)
-    localparam int TIMER1_TICK_COUNT = 4000;    // 80 us at 50 MHz
-    localparam int TIMER2_TICK_COUNT = 16000;   // 320 us at 50 MHz
+    // ZEMMIX: the timers of the YMF278B (OPL4), 2736 and 10944 periods of its 33.8688 MHz
+    // (80.78 / 323.13 us, manual p41: 80.8 / 323.1 us; the OPL3 was 80 / 320 us here).
+    // A tick every TICK_MOD / TICK_INC cycles of the 50 MHz clk, as integers (CLK_FREQ *
+    // interval with reals is not computed right by every tool: MoonTANG saw a timer 30
+    // times too slow on Gowin): 2736 * 50 / 33.8688 = 593750 / 147 = 4039.12 cycles, the
+    // same time base as the wave engine (opl4_wave CE 10584 / 15625 of 50 MHz)
+    localparam int TIMER_TICK_INC  = 147;
+    localparam int TIMER1_TICK_MOD = 593750;    // 80.78 us at 50 MHz
+    localparam int TIMER2_TICK_MOD = 2375000;   // 323.13 us at 50 MHz
 
     typedef enum logic [2:0] {
         OP_NORMAL,
