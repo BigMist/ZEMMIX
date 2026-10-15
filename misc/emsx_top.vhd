@@ -3053,6 +3053,7 @@ begin
                 if( v99m_take = '1' )then
                     wave_slot <= '0';                                       -- a vdp slot for the V9990 VRAM
                 elsif( s1_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '1' and iSltRfsh_n = '1' and
+                    ( not wave_line_c or s1_we = '1' ) and                     -- DIAG: the wave reads only in the vdp slots
                     ( RamReq = '0' or
                       (r8_owner = '1' and wave_wait = "11" and iSltErm = '0') ) )then
                     wave_slot <= '1';
@@ -3124,8 +3125,7 @@ begin
     v99m_take  <= '1' when( v99_sdram_g and (v99m_req_t xor v99m_ack_s) = '1' and v99m_busy = '0' and
                             RstSeq(4 downto 3) = "11" and
                             ((opl4_wave_ext_g and col_dl_i = '0') or s1_pend = '0') and   -- the OPL4 first
-                            ( VideoDLClk = '0' or sdr_hold = '1' or                     -- a vdp slot
-                              ( iSltRfsh_n = '1' and RamReq = '0' ) ) )else '0';        -- a free cpu slot
+                            ( VideoDLClk = '0' or sdr_hold = '1' ) )else '0';           -- DIAG: only a vdp slot
     v99_line   <= v99_slot and not v99m_we;
     v99m_ack_t <= v99m_ack_s;
     v99m_rdat  <= v99m_rdat_s;
