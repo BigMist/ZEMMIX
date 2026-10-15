@@ -44,16 +44,20 @@
 module opl3fpga_timer
     import opl3_pkg::*;
 #(
-    parameter int TICK_COUNT = 4000 // ZEMMIX: clk cycles of a tick (was TIMER_TICK_INTERVAL in seconds, real)
+    // ZEMMIX: a tick every TICK_MOD / TICK_INC clk cycles (fractional, on average; was
+    // TIMER_TICK_INTERVAL in seconds, real)
+    parameter int TICK_INC = 1,
+    parameter int TICK_MOD = 4000
 ) (
     input wire clk,
     input wire [REG_TIMER_WIDTH-1:0] timer_reg,
     input wire start_timer,
     output logic timer_overflow_pulse = 0
 );
-    localparam int TICK_TIMER_COUNT_VALUE = TICK_COUNT;
+    localparam int ACC_WIDTH = $clog2(TICK_MOD + TICK_INC);
 
-    logic [$clog2(TICK_TIMER_COUNT_VALUE)-1:0] tick_counter = 0;
+    logic [ACC_WIDTH-1:0] tick_acc = 0;
+    logic [ACC_WIDTH:0] tick_nxt;
     logic tick_pulse = 0;
     logic [REG_TIMER_WIDTH-1:0] timer = 0;
     logic start_timer_set_pulse;
@@ -72,14 +76,18 @@ module opl3fpga_timer
         .edge_detected(start_timer_set_pulse)
     );
 
-    always_comb tick_pulse = tick_counter == TICK_TIMER_COUNT_VALUE - 1;
+    always_comb tick_nxt = tick_acc + TICK_INC;
+    // ZEMMIX: no tick while stopped (a stopped counter at its last value ticked every clk)
+    always_comb tick_pulse = start_timer && !start_timer_set_pulse && tick_nxt >= TICK_MOD;
 
     always_ff @(posedge clk)
         if (start_timer) begin
-            if (tick_pulse || start_timer_set_pulse)
-                tick_counter <= 0;
+            if (start_timer_set_pulse)
+                tick_acc <= 0;
+            else if (tick_pulse)
+                tick_acc <= ACC_WIDTH'(tick_nxt - TICK_MOD);
             else
-                tick_counter <= tick_counter + 1;
+                tick_acc <= ACC_WIDTH'(tick_nxt);
         end
 
     /*

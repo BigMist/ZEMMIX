@@ -9,6 +9,7 @@
 //   * per source volumes of the OCM (PsgVol, SccVol, OpllVol: 0 = mute, 4 = normal,
 //     7 = +6dB), OPL3 follows OpllVol (FM) and the PCM follows PsgVol
 //   * master volume (MstrVol: 0 = 0dB ... 6 = -18dB, 7 = mute) after the saturation
+//   * mute: the MUTE bit of the turboR PCM (A5h bit 1, PAUSE key) silences every source
 //
 module audio_mix (
     input  wire               clk,                  // clk_sys (21.48MHz)
@@ -27,6 +28,7 @@ module audio_mix (
     input  wire signed [ 7:0] pcm,                  // turboR PCM, signed
     input  wire               tape_en,
     input  wire               tape_in,
+    input  wire               mute,                 // turboR A5h MUTE: all the sound
 
     input  wire        [ 2:0] psg_vol,
     input  wire        [ 2:0] scc_vol,
@@ -159,8 +161,8 @@ module audio_mix (
     wire signed [21:0] o_l = m_l * $signed({1'b0, g_mstr});
     wire signed [21:0] o_r = m_r * $signed({1'b0, g_mstr});
     always @(posedge clk) begin
-        out_l <= o_l >>> 4;
-        out_r <= o_r >>> 4;
+        out_l <= mute ? 16'sd0 : o_l >>> 4;
+        out_r <= mute ? 16'sd0 : o_r >>> 4;
     end
 
     // sigma-delta DAC: offset binary (0 = most negative, 8000h = silence)

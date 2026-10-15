@@ -2,6 +2,8 @@
 ; through the memory registers on ports 7Eh/7Fh (opl4_memtest, ZEMMIX-0au.4),
 ; then reads it back and compares it with the file. MSX-DOS 2 / Nextor.
 ; YRWLOAD V only compares (the firmware loads ZEMMIX.ROM when the core starts).
+; The load diagnostics (regs F0h-F3h, FAh-FFh) need a core built with DBG_REGS = 1
+; in opl4_wave (GitHub #5); else they show the chip registers.
 ; With the real OPL4 the ROM area is read only: YRWLOAD V is the useful mode.
 
 BDOS    equ     5

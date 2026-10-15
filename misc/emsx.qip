@@ -27,7 +27,7 @@ set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) msx_psg.vh
 #set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/opll/vm2413/voicerom.vhd]
 #set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) opll/eseopll.vhd]
 set_global_assignment -name QIP_FILE [file join $::quartus(qip_path) ikaopll/ikaopll.qip]
-set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/sound/tr_pcm/tr_pcm.v]
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) tr_pcm.v]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/fifo.vhd]
 #set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) ../ocm-pld-dev/esemsx3/src/peripheral/iplrom_304k.v]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) kanji.vhd]

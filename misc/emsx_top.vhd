@@ -202,6 +202,7 @@ entity emsx_top is
 		  scc2_r         : out std_logic_vector(14 downto 0 );
 		  psg_o          : out std_logic_vector( 15 downto 0 );     -- PSG + PSG2 + key click, unsigned 0..26618
         TrPcm_o        : out std_logic_vector( 7 downto 0 );
+        TrPcmMute_o    : out std_logic;                             -- A5h MUTE: silences every source (PAUSE)
 		  Vol_o          : out std_logic_vector( 2 downto 0 );      -- MstrVol
 		  PsgVol_o       : out std_logic_vector( 2 downto 0 );
 		  SccVol_o       : out std_logic_vector( 2 downto 0 );
@@ -747,7 +748,8 @@ architecture RTL of emsx_top is
             dbi             : out   std_logic_vector(  7 downto 0 );
             dbo             : in    std_logic_vector(  7 downto 0 );
             wave_in         : in    std_logic_vector(  7 downto 0 );
-            wave_out        : out   std_logic_vector(  7 downto 0 )
+            wave_out        : out   std_logic_vector(  7 downto 0 );
+            mute            : out   std_logic
         );
     end component;
 
@@ -3690,7 +3692,7 @@ begin
 
     U40 : tr_pcm
         port map(clk21m, reset, tr_pcm_req, open, wrt, adr(0), tr_pcm_dbi, dbo,
-                        tr_pcm_wave_in, trPcm_o);
+                        tr_pcm_wave_in, trPcm_o, TrPcmMute_o);
 
     -- turboR PCM sampler (microphone of the A1ST/GT): the 1-bit audio input (ear_i)
     tr_pcm_wave_in <= X"C0" when( ear_i = '1' )else X"40";
