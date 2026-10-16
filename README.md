@@ -12,8 +12,8 @@ the S1990, the turbo R PCM, the MoonSound (OPL4) and the GFX9000 (V9990).
 | Board | FPGA | Cartridge slot | 2nd SDRAM | HDMI | V9990 | Project |
 |---|---|---|---|---|---|---|
 | SiDi128 | Cyclone 10 LP 10CL120 | no | yes | yes | yes | `SiDi128/` |
-| Poseidon GX150 | Cyclone IV GX150 | yes | no | no | no | `poseidon-gx150/` |
-| NeptUNO+ | Cyclone IV GX150 | yes | no | no | no | `NeptUNOplus/` |
+| Poseidon GX150 | Cyclone IV GX150 | yes | no | no | yes (VRAM in the main SDRAM) | `poseidon-gx150/` |
+| NeptUNO+ | Cyclone IV GX150 | yes | no | no | yes (VRAM in the main SDRAM) | `NeptUNOplus/` |
 | NeptUNO+ dual SDRAM | Cyclone IV GX150 | no (its pins go to the 2nd SDRAM) | yes | no | yes | `NeptUNOplus_dual/` |
 
 ## From OCM-PLD
@@ -69,10 +69,12 @@ kept as close to upstream as possible.
 
 ### Video
 * **V9958 replaced by the V9968** of HRA! (`v9968/`), MSX2+ compatible.
-* **V9990 / GFX9000** (ports 60h-6Fh) on the boards with a 2nd SDRAM: its
-  own core (`v9990/`, submodule), all modes but B5 / B6, the command
-  engine, sprites.  The 512 KB VRAM is in the 2nd SDRAM behind a line
-  cache.
+* **V9990 / GFX9000** (ports 60h-6Fh) on every board: its own core
+  (`v9990/`, submodule), all the modes (B5 / B6 too), the command engine,
+  sprites.  The 512 KB VRAM is behind a line cache, in the 2nd SDRAM, or on
+  the boards with one SDRAM (Poseidon GX150, NeptUNO+) in the slots of the
+  main SDRAM that the VDP and the CPU leave free (`V99_SDRAM1`); the fetch
+  of the next display line goes first.
 * OSD *HDMI screen*: Auto (the V9990 while its display is on), V9958 or
   V9990.  With HDMI, the chosen screen goes to HDMI and the other one to
   VGA.

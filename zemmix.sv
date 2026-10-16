@@ -188,15 +188,24 @@ localparam SDRAM2 = "true";
 localparam SDRAM2 = "false";
 `endif
 
-// V9990 (GFX9000, ports 60h-6Fh): its 512 KB VRAM is in the 2nd SDRAM
+// V9990 (GFX9000, ports 60h-6Fh): its 512 KB VRAM is in the 2nd SDRAM, or with
+// V99_SDRAM1 in the vdp slots of the 1st SDRAM (emsx_top v99_sdram_g, ZEMMIX-qw0)
 `ifdef V9990
 `ifndef DUAL_SDRAM
+`ifndef V99_SDRAM1
 v9990_needs_DUAL_SDRAM v9990_needs_DUAL_SDRAM();   // no such module: build error
 `endif
+`endif
 localparam V9990 = "true";
+`ifdef V99_SDRAM1
+localparam V99_SDRAM1 = "true";
+`else
+localparam V99_SDRAM1 = "false";
+`endif
 `define V99_OSD "P2ODE,HDMI screen,Auto,V9958,V9990;",
 `else
 localparam V9990 = "false";
+localparam V99_SDRAM1 = "false";
 `define V99_OSD
 `endif
 
@@ -296,6 +305,13 @@ sdramclk_ddr
 	.sset(1'b0)
 );
 //////////////////   2nd SDRAM (SiDi128)   ///////////////////
+// V9990 VRAM (misc/v9990_vram_sdram.sv, below): reads are lines of 4 words, in
+// the 2nd SDRAM (port 1 of sdram2) or in the 1st (V99_SDRAM1, emsx_top)
+wire        v99_s_req, v99_s_ack, v99_s_we;
+wire  [1:0] v99_s_be;
+wire [23:0] v99_s_addr;
+wire [15:0] v99_s_din;
+wire [63:0] v99_s_dout;
 // OPL4 wave memory from emsx_top (opl4_wave_ext_g): byte address, 16-bit words
 wire        wave_req_t, wave_we;
 wire        wave_done_t;
@@ -333,12 +349,6 @@ sdram2clk_ddr
 );
 
 wire        sdram2_ready;
-// V9990 VRAM (misc/v9990_vram_sdram.sv, below): reads are lines of 4 words
-wire        v99_s_req, v99_s_ack, v99_s_we;
-wire  [1:0] v99_s_be;
-wire [23:0] v99_s_addr;
-wire [15:0] v99_s_din;
-wire [63:0] v99_s_dout;
 
 sdram2 #(.P0_LINE(1)) sdram2
 (
@@ -360,13 +370,19 @@ sdram2 #(.P0_LINE(1)) sdram2
 	.p0_dout    ( wave_rdat       ),
 
 	// V9990 VRAM
+`ifdef V99_SDRAM1
+	.p1_req     ( 1'b0            ),             // V9990 VRAM in the 1st SDRAM
+	.p1_ack     (                 ),
+	.p1_dout    (                 ),
+`else
 	.p1_req     ( v99_s_req       ),
 	.p1_ack     ( v99_s_ack       ),
+	.p1_dout    ( v99_s_dout      ),
+`endif
 	.p1_we      ( v99_s_we        ),
 	.p1_be      ( v99_s_be        ),
 	.p1_addr    ( v99_s_addr      ),
 	.p1_din     ( v99_s_din       ),
-	.p1_dout    ( v99_s_dout      ),
 
 	.SDRAM_A    ( SDRAM2_A        ),
 	.SDRAM_DQ   ( SDRAM2_DQ       ),
@@ -866,6 +882,7 @@ emsx_top #(
     .use_opl4_g(OPL3),         // OPL4 wave part (MoonSound) with the OPL3 of misc/opl3fpga
     .opl4_wave_ext_g(SDRAM2),  // OPL4 wave memory in the 2nd SDRAM instead of the top 4 MB of the SDRAM
     .use_v9990_g(V9990),       // V9990 (GFX9000), ports 60h-6Fh
+    .v99_sdram_g(V99_SDRAM1),  // V9990 VRAM in the vdp slots of this SDRAM
     .use_dualpsg_g(true), // activar doble chip PSG
     .opl3_clk_g(OPL3_CLK)
 ) emsx (
@@ -986,6 +1003,15 @@ emsx_top #(
 		  .v99_ack         (v99_ack),
 		  .v99_dbi         (v99_dbi),
 		  .v99_int_n       (v99_int_n),
+`ifdef V99_SDRAM1
+		  .v99m_req_t      (v99_s_req),
+		  .v99m_ack_t      (v99_s_ack),
+		  .v99m_we         (v99_s_we),
+		  .v99m_be         (v99_s_be),
+		  .v99m_adr        (v99_s_addr[17:0]),
+		  .v99m_wdat       (v99_s_din),
+		  .v99m_rdat       (v99_s_dout),
+`endif
 		  .opl3_l      (opl3_l),
 		  .opl3_r      (opl3_r),
 		  .opl4_l      (opl4_l),
