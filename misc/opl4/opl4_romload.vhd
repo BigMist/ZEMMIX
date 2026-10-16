@@ -1,7 +1,7 @@
 --
 -- opl4_romload.vhd
---   Loads the YRW801 (ZEMMIX.ROM, 2 MB) into the OPL4 wave memory (ZEMMIX-0au.5).
---   The MiST firmware sends <core>.ROM through data_io index 0 when the core
+--   Loads the YRW801 (ZEMMIX.R01, 2 MB; ZEMMIX.ROM before ZEMMIX-n6s) into the OPL4 wave memory (ZEMMIX-0au.5).
+--   The MiST firmware sends <core>.R01 through data_io index 1 (after <core>.ROM) when the core
 --   starts, with no flow control, while the SDRAM may not be ready yet (the OCM
 --   RstSeq takes about 24 ms, the loader can write from RstSeq = 8 on, in any slot):
 --   the bytes go through a 64 KB FIFO (the firmware starts a few ms after the FPGA
@@ -87,7 +87,7 @@ begin
     m_busy     <= ff_m_req_t xor m_done_t;
     c_pend     <= c_req_t xor ff_c_done_t;
 
-    -- FIFO write side: the bytes of data_io index 0
+    -- FIFO write side: the bytes of data_io index 1 (dl)
     process( clk21m )
     begin
         if( clk21m'event and clk21m = '1' )then
