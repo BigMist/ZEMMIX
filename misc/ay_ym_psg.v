@@ -19,12 +19,11 @@
 //-------------------------------------------------------------------------------------------------
 module ay_ym_psg
 //-------------------------------------------------------------------------------------------------
-#(
+(
 	// 0: GI AY-3-8910, 16 step envelope, unused register bits read back as 0
 	// 1: Yamaha YM2149, 32 step envelope, registers read back as written
-	parameter YM = 0
-)
-(
+	input  wire       ym,    // can change at any time (OSD)
+
 	input  wire       clock, // main clock (at least twice clock enable)
 	input  wire       sel,   // 0 for a further division by two (same a YM2149)
 	input  wire       ce,    // clock enable (posedge clock)
@@ -147,7 +146,7 @@ always @(posedge clock, negedge reset)
 	else if(ce) if(bdir && !bc1 && addr <= 13) raw[addr*8 +: 8] <= d;
 
 always @(*)
-	if(YM && addr <= 13) q = raw[addr*8 +: 8]; else
+	if(ym && addr <= 13) q = raw[addr*8 +: 8]; else
 	case(addr)
 		 0: q = a_period[ 7:0];
 		 1: q = { 4'd0, a_period[11:8] };
@@ -240,9 +239,10 @@ always @(posedge clock, posedge e_reset)
 	else if(ce) if(stb) begin e_ff_p <= 1'b0; if(e_count_ge) if(!e_ff) e_ff_p <= 1'b1; end
 
 // AY: 16 steps, one every two envelope periods. YM: 32 steps, one every envelope period,
-// so the whole shape lasts the same on both
-localparam[4:0] SC_TOP = YM ? 5'd31 : 5'd15;
-wire e_step = YM ? e_count_ge : e_ff_p;
+// so the whole shape lasts the same on both. Switching AY -> YM in the middle of a shape
+// only gives one odd step; YM -> AY with sc above 15 runs on to 31 and wraps (one period)
+wire[4:0] SC_TOP = ym ? 5'd31 : 5'd15;
+wire e_step = ym ? e_count_ge : e_ff_p;
 
 reg v_hold;
 reg[4:0] sc;
@@ -309,7 +309,7 @@ initial begin
 	dac[28] = 12'h987; dac[29] = 12'hB53; dac[30] = 12'hD76; dac[31] = 12'hFFF;
 end
 
-wire[4:0] e_vol = YM ? e_level : e_level == 0 ? 5'd0 : { e_level[3:0], 1'b1 };
+wire[4:0] e_vol = ym ? e_level : e_level == 0 ? 5'd0 : { e_level[3:0], 1'b1 };
 wire[4:0] a_vol = a_mode ? e_vol : a_level == 0 ? 5'd0 : { a_level, 1'b1 };
 wire[4:0] b_vol = b_mode ? e_vol : b_level == 0 ? 5'd0 : { b_level, 1'b1 };
 wire[4:0] c_vol = c_mode ? e_vol : c_level == 0 ? 5'd0 : { c_level, 1'b1 };

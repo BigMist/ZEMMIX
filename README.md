@@ -12,8 +12,8 @@ the S1990, the turbo R PCM, the MoonSound (OPL4) and the GFX9000 (V9990).
 | Board | FPGA | Cartridge slot | 2nd SDRAM | HDMI | V9990 | Project |
 |---|---|---|---|---|---|---|
 | SiDi128 | Cyclone 10 LP 10CL120 | no | yes | yes | yes | `SiDi128/` |
-| Poseidon GX150 | Cyclone IV GX150 | yes | no | no | no | `poseidon-gx150/` |
-| NeptUNO+ | Cyclone IV GX150 | yes | no | no | no | `NeptUNOplus/` |
+| Poseidon GX150 | Cyclone IV GX150 | yes | no | no | yes (VRAM in the main SDRAM) | `poseidon-gx150/` |
+| NeptUNO+ | Cyclone IV GX150 | yes | no | no | yes (VRAM in the main SDRAM) | `NeptUNOplus/` |
 | NeptUNO+ dual SDRAM | Cyclone IV GX150 | no (its pins go to the 2nd SDRAM) | yes | no | yes | `NeptUNOplus_dual/` |
 
 ## From OCM-PLD
@@ -24,7 +24,10 @@ kept as close to upstream as possible.
 ### System
 * Z80 (T80) at 3.58 MHz, with the OCM turbo speeds (OSD *CPU Clock* and
   smart commands).
-* IPL ROM that loads the BIOS (`OCM-BIOS.DAT`) from the SD card.
+* The BIOS (`OCM-BIOS.DAT`) comes from the firmware as `ZEMMIX.ROM` when the
+  core starts, or from the OSD (*Load BIOS*), into the ESE-RAM with the MSX in
+  reset; it is then write protected and stays over every reset.  Without
+  it, the IPL ROM loads `OCM-BIOS.DAT` from the disk image as on the OCM.
 * Switched I/O ports: the OCM smart commands (`SETSMART`) for speed,
   slots, volumes, keyboard layout...
 * System timer (E6h / E7h) and the turbo R PCM (A4h / A5h) of OCM-PLD.
@@ -66,10 +69,12 @@ kept as close to upstream as possible.
 
 ### Video
 * **V9958 replaced by the V9968** of HRA! (`v9968/`), MSX2+ compatible.
-* **V9990 / GFX9000** (ports 60h-6Fh) on the boards with a 2nd SDRAM: its
-  own core (`v9990/`, submodule), all modes but B5 / B6, the command
-  engine, sprites.  The 512 KB VRAM is in the 2nd SDRAM behind a line
-  cache.
+* **V9990 / GFX9000** (ports 60h-6Fh) on every board: its own core
+  (`v9990/`, submodule), all the modes (B5 / B6 too), the command engine,
+  sprites.  The 512 KB VRAM is behind a line cache, in the 2nd SDRAM, or on
+  the boards with one SDRAM (Poseidon GX150, NeptUNO+) in the slots of the
+  main SDRAM that the VDP and the CPU leave free (`V99_SDRAM1`); the fetch
+  of the next display line goes first.
 * OSD *HDMI screen*: Auto (the V9990 while its display is on), V9958 or
   V9990.  With HDMI, the chosen screen goes to HDMI and the other one to
   VGA.
@@ -77,15 +82,15 @@ kept as close to upstream as possible.
 
 ### Sound
 * **PSG**: Kyp069's AY-3-891x instead of the OCM one, modified for ZEMMIX
-  with a YM2149 personality (build parameter `psg_ym_g`; ZEMMIX uses the
-  YM2149).
+  with a YM2149 personality (OSD *PSG*: YM2149 by default, or AY-3-8910;
+  *PSG2* the same for the PSG of a Yamanooto).
 * **MSX-MUSIC** with IKAOPLL (YM2413 from a die shot) instead of the OCM
   VM2413.
 * **MoonSound**:
   * FM: OPL3 (`opl3_fpga` of Greg Taylor) on the 50 MHz clock, ports
     C4h-C7h.
   * Wave: OPL4 (YMF278B PCM engine of srg320) on ports 7Eh / 7Fh, 2 MB of
-    wave RAM plus the YRW801 sample ROM, loaded from `ZEMMIX.ROM` by the
+    wave RAM plus the YRW801 sample ROM, loaded from `ZEMMIX.R01` by the
     firmware.  The wave memory is in the 2nd SDRAM on the SiDi128 and in
     the top 4 MB of the main SDRAM elsewhere.
   * Can be turned off in the OSD.
@@ -96,25 +101,34 @@ kept as close to upstream as possible.
 
 ## OSD
 
-Main menu: *Load virtual disk*, *Load ROM (max 8MB)*, *Slot1 ROM type*, then
-*DIP Settings* (CPU Clock to Internal MegaSD below), the sound, the
-video and *Reset*.
+Main menu: *Load virtual disk*, *Load BIOS*, *Load ROM (max 8MB)*, *Slot1
+ROM type*, the sections *System*, *Video Options* and *Audio Options*,
+*Reset* and *Eject cartridge & reset*.  The sections only group the options:
+a saved configuration keeps its values, but *internal MegaSD* is a new
+option, On by default.
 
 | Option | Values |
 |---|---|
+| Load BIOS | an `OCM-BIOS.DAT` (`.DAT`) into the ESE-RAM, as `ZEMMIX.ROM` at start (MSX in reset, then it boots it) |
+| Eject cartridge & reset | clears the ROM written into the MegaSCC+ / MegaRAM of slot 1 and 2 (and a collection) and resets: the MSX starts without it |
 | Load ROM (max 8MB) | a collection ROM into the 8 MB of slot 1 (MSX in reset, seconds) |
 | Slot1 ROM type | MegaSCC+, KUC 8MB, Yamanooto 8MB (collection cartridges, 32 MB SDRAM) |
+| **System** | |
 | CPU Clock | Standard, Turbo |
-| Video Hz | Auto, 60 Hz (NTSC), 50 Hz (PAL) |
+| RAM | 2048 KB, 4096 KB |
 | Slot 1 | External (cartridge), MegaSCC+ 2 MB |
 | Slot 2 | External, MegaSCC+ 2 MB, MegaRAM 1 MB/1 MB (ASCII 8), MegaRAM 2 MB/2 MB (ASCII 16) |
-| RAM | 2048 KB, 4096 KB |
-| Internal MegaSD | Off, On |
-| Tape sound | Off, On |
-| Scanlines | Off, 25 %, 50 %, 75 % |
-| MoonSound (OPL3 / OPL4) | On, Off (its ports; the sound stays mixed) |
+| Internal MegaSD | On (default), Off |
+| **Video Options** | |
+| Video Hz | Auto, 60 Hz (NTSC), 50 Hz (PAL) |
 | Palette | V9968, openMSX |
 | HDMI screen (V9990 builds) | Auto, V9958, V9990 |
+| Scanlines | Off, 25 %, 50 %, 75 % |
+| **Audio Options** | |
+| MoonSound (OPL3 / OPL4) | On, Off (its ports; the sound stays mixed) |
+| PSG | YM2149, AY-3-8910 (32 or 16 step envelope, register read back) |
+| PSG2 (Yamanooto) | YM2149, AY-3-8910 |
+| Tape sound | Off, On |
 
 ### Collection cartridges
 
@@ -132,9 +146,14 @@ MSX-DOS, `MEGALOAD /L` and `/G:n` load one game of a collection
 ## SD card
 
 * The core (`ZEMMIX_<board>_3.9.2+.rbf`).
-* `ZEMMIX.ROM`: the YRW801 MoonSound ROM, loaded at start.
-* A VHD image with Nextor 3.0, `OCM-BIOS.DAT` (turbo R BIOS) and the
-  tools, mounted with *Load virtual disk*.
+* `ZEMMIX.ROM`: the turbo R BIOS (`OCM-BIOS.DAT` renamed), loaded at start.
+* `ZEMMIX.R01`: the YRW801 MoonSound ROM, loaded at start.
+* A VHD image with Nextor 3.0, `OCM-BIOS.DAT` (turbo R BIOS, used when there
+  is no `ZEMMIX.ROM`) and the tools, mounted with *Load virtual disk*.
+
+The firmware sends `ZEMMIX.ROM` and `ZEMMIX.R01` from the core's folder (or
+the root) through data_io, index 0 and 1.  Before this version
+`ZEMMIX.ROM` was the YRW801: rename it to `ZEMMIX.R01`.
 
 The image has turbo R and GFX9000 software, MoonSound music (RoboPlay) and
 test tools: `ZEXDOC` / `ZEXALL` (`ZEXR800.BAT`), `R800BEN`, `SNDTEST.BAS`,
