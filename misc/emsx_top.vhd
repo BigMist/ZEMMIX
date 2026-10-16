@@ -54,7 +54,6 @@ entity emsx_top is
         opl4_wave_ext_g : boolean   := false;                           -- OPL4 wave memory outside (2nd SDRAM), not in the top 4 MB of the SDRAM
         use_v9990_g     : boolean   := false;                           -- V9990 (GFX9000): ports 60h-6Fh, VRAM outside (2nd SDRAM)
         use_dualpsg_g   : boolean   := true;
-        psg_ym_g        : integer   := 0;                               -- PSG personality: 0 = AY-3-8910, 1 = YM2149
         opl3_clk_g      : integer   := 50000000                         -- clk_opl in Hz
     );
     port(
@@ -212,10 +211,18 @@ entity emsx_top is
         -- OSD: MoonSound (OPL3 + OPL4) on
         opl_on_i       : in    std_logic := '1';
 
-        -- ZEMMIX.ROM (YRW801) from data_io index 0, to the OPL4 wave memory
+        -- OSD: PSG personality, 0 = AY-3-8910, 1 = YM2149 (PSG2: the PSG of a Yamanooto, 10h-13h)
+        psg_ym_i       : in    std_logic := '1';
+        psg2_ym_i      : in    std_logic := '1';
+
+        -- ZEMMIX.R01 (YRW801) from data_io index 1, to the OPL4 wave memory
         rom_dl_i       : in    std_logic := '0';
         col_dl_i       : in    std_logic := '0';                                -- OSD Slot1 8MB ROM: the file to SDRAM 16 MB,
         col_wr_i       : in    std_logic := '0';                                --   the MSX in reset (ZEMMIX-58x)
+        bios_dl_i      : in    std_logic := '0';                                -- data_io index 0: OCM-BIOS.DAT to the ESE-RAM (col_wr_i,
+                                                                                --   col_adr_i, col_dat_i), the MSX in reset; then write protected
+        bios_jis2_i    : in    std_logic := '0';                                -- that BIOS is 512 KB: JIS2 kanji on
+        eject_i        : in    std_logic := '0';                                -- OSD eject (the MSX in reset): clear the "AB" of the cartridges
         col_adr_i      : in    std_logic_vector( 22 downto 0 ) := (others => '0');
         col_dat_i      : in    std_logic_vector(  7 downto 0 ) := (others => '0');
         rom_wr_i       : in    std_logic := '0';
@@ -537,10 +544,8 @@ architecture RTL of emsx_top is
     end component;
 
     component msx_psg
-        generic(
-            YM          : integer := 0
-        );
         port(
+            ym          : in    std_logic;
             clk21m      : in    std_logic;
             reset       : in    std_logic;
             clkena      : in    std_logic;
@@ -929,6 +934,7 @@ architecture RTL of emsx_top is
     signal  RstSeq          : std_logic_vector(  4 downto 0 ) := (others => '0');
     signal  FreeCounter     : std_logic_vector( 15 downto 0 ) := (others => '0');
     signal  HardRst_cnt     : std_logic_vector(  3 downto 0 ) := (others => '0');
+    signal  HardRst_d       : std_logic_vector(  3 downto 0 ) := (others => '0');   -- HardRst_cnt in memclk, for its edge
     signal  LogoRstCnt      : std_logic_vector(  5 downto 0 ) := (others => '0');
     signal  logo_timeout    : std_logic_vector(  1 downto 0 );
     signal  iCpuClk         : std_logic;
@@ -1171,27 +1177,36 @@ architecture RTL of emsx_top is
     signal  wave_pend       : std_logic;
     signal  wave_slot       : std_logic := '0';                                     -- this cpu slot is for the wave memory
     signal  wave_go         : std_logic;                                             -- wave_slot for this slot (cpu slot, or any during RstSeq)
-    -- OSD collection load (ZEMMIX-58x): through the wave slots of this SDRAM
-    -- (s1_*: the OPL4 wave memory, or the collection while col_dl_i)
-    type colf_t is array (0 to 15) of std_logic_vector( 30 downto 0 );
+    -- OSD collection load (ZEMMIX-58x), BIOS download and eject (ZEMMIX-n6s): through the
+    -- wave slots of this SDRAM (s1_*: the OPL4 wave memory, or this FIFO while fifo_act)
+    type colf_t is array (0 to 15) of std_logic_vector( 32 downto 0 );     -- CpuAdr(24..0) & data
     signal  colf            : colf_t;
     signal  colf_wp         : std_logic_vector(  3 downto 0 ) := (others => '0');
     signal  colf_rp         : std_logic_vector(  3 downto 0 ) := (others => '0');
+    signal  colf_we         : std_logic;
+    signal  colf_in         : std_logic_vector( 32 downto 0 );
+    signal  fifo_dl         : std_logic;                                            -- a download / eject is on
+    signal  fifo_act        : std_logic;                                            -- ... or its FIFO is not empty yet
+    signal  ej_cnt          : std_logic_vector(  2 downto 0 ) := (others => '0');   -- eject: writes left
+    signal  ej_d            : std_logic := '0';
+    signal  bios_prot       : std_logic := '0';                                     -- the BIOS came from data_io: write protected
+    signal  sdr_prot        : std_logic := '0';                                     -- this SDRAM write is to the protected BIOS
+    signal  JIS2_eff        : std_logic;
     signal  colw_req_t      : std_logic := '0';
     signal  colw_done_t     : std_logic := '0';
     signal  colw_busy       : std_logic := '0';
-    signal  colw_adr        : std_logic_vector( 22 downto 0 ) := (others => '0');
+    signal  colw_adr        : std_logic_vector( 24 downto 0 ) := (others => '0');
     signal  colw_dat        : std_logic_vector(  7 downto 0 ) := (others => '0');
     signal  colw_pend       : std_logic;
     signal  s1_pend         : std_logic;
     signal  s1_we           : std_logic;
     signal  s1_adr          : std_logic_vector( 24 downto 0 );
     signal  s1_wdat         : std_logic_vector(  7 downto 0 );
-    signal  sdr_hold        : std_logic;                                             -- MSX reset or ZEMMIX.ROM download: the sequencer runs without the VDP
+    signal  sdr_hold        : std_logic;                                             -- MSX reset or a data_io download: the sequencer runs without the VDP
     signal  sdr_wr_a0       : std_logic := '0';                                     -- byte of the cpu / wave write (taken at "001")
     signal  CpuAdr_r        : std_logic_vector( 24 downto 0 ) := (others => '0');   -- CpuAdr registered in memclk (ZEMMIX-dl0)
     signal  wave_wait       : std_logic_vector(  1 downto 0 ) := "00";               -- cpu slots waited (R800)
-    -- wave memory client before the ZEMMIX.ROM loader (7Eh/7Fh test, later the PCM engine)
+    -- wave memory client before the YRW801 loader (7Eh/7Fh test, later the PCM engine)
     signal  wt_req_t        : std_logic := '0';
     signal  wt_done_t       : std_logic;
     signal  wt_we           : std_logic := '0';
@@ -1670,14 +1685,20 @@ begin
     process( memclk )
     begin
         if( memclk'event and memclk = '1' )then
-            -- ZEMMIX: not during the ZEMMIX.ROM download (the MSX is in reset for 1-2 s then, at
-            -- power on HardRst_cnt is "0010" at once): RstSeq goes on and the SDRAM is ready for
-            -- the loader after about 24 ms, else its FIFO overflows
-            if( (HardRst_cnt = "0010" and rom_dl_i = '0') or bios_reload_ack = '1' )then   -- long click > 800ms
+            -- ZEMMIX: on the edge into "0010" (it stays there 100 ms: at power on HardRst_cnt is
+            -- "0010" at once, and holding RstSeq at 0 kept the SDRAM off for those 100 ms) and not
+            -- during a data_io download or eject (the MSX is in reset for seconds then; RstSeq
+            -- would stop the loaders' writes and clear the "AB" of a BIOS just loaded).
+            -- The SDRAM set up (RstSeq 0-7) goes 64 times faster: ready about 0.4 ms after the
+            -- start, before the firmware sends ZEMMIX.ROM, the BIOS (no flow control, small FIFO)
+            HardRst_d <= HardRst_cnt;
+            if( (HardRst_cnt = "0010" and HardRst_d /= "0010" and rom_dl_i = '0' and fifo_dl = '0') or
+                bios_reload_ack = '1' )then                                             -- long click > 800ms
                 RstSeq <= "00000";                                                      -- RstSeq is required
                 ff_reload_n <= '0';                                                     -- OCM-BIOS is partial
-            elsif( ff_mem_seq = "00" and FreeCounter = X"FFFF" and RstSeq /= "11111" )then
-                RstSeq <= RstSeq + 1;                                                   -- 3ms (= 65536 / 21.48MHz)
+            elsif( ff_mem_seq = "00" and RstSeq /= "11111" and
+                   (FreeCounter = X"FFFF" or (RstSeq(4 downto 3) = "00" and FreeCounter(9 downto 0) = "1111111111")) )then
+                RstSeq <= RstSeq + 1;                                                   -- 3ms (= 65536 / 21.48MHz), 48 us while 0-7
             elsif( ff_ldbios_n = '1' )then
                 ff_reload_n <= '1';                                                     -- OCM-BIOS is complete
             end if;
@@ -2045,7 +2066,7 @@ begin
                 dlydbi <= Psg2Dbi;
             elsif( mem = '0' and adr(  7 downto 2 ) = "101010" )then                                        -- PPI (8255)
                 dlydbi <= PpiDbi;
-            elsif( mem = '0' and adr(  7 downto 2 ) = "110110" and JIS2_ena = '1' )then                     -- Kanji-data (JIS1+JIS2)
+            elsif( mem = '0' and adr(  7 downto 2 ) = "110110" and JIS2_eff = '1' )then                     -- Kanji-data (JIS1+JIS2)
                 dlydbi <= KanDbi;
             elsif( mem = '0' and adr(  7 downto 1 ) = "1101100" )then                                       -- Kanji-data (JIS1 only)
                 dlydbi <= KanDbi;
@@ -2680,7 +2701,7 @@ begin
                 '1' when( pSltAdr(7 downto 2) = "101000"                                        )else   -- I/O:A0-A3h / PSG (AY-3-8910)
                 '1' when( pSltAdr(7 downto 2) = "000100" and Psg2On = '1' and use_dualpsg_g  )else   -- I/O:10-13h / PSG2 (AY-3-8910)
                 '1' when( pSltAdr(7 downto 2) = "101010"                                        )else   -- I/O:A8-ABh / PPI (8255)
-                '1' when( pSltAdr(7 downto 2) = "110110" and JIS2_ena = '1'                     )else   -- I/O:D8-DBh / Kanji-data (JIS1+JIS2)
+                '1' when( pSltAdr(7 downto 2) = "110110" and JIS2_eff = '1'                     )else   -- I/O:D8-DBh / Kanji-data (JIS1+JIS2)
                 '1' when( pSltAdr(7 downto 1) = "1101100"                                       )else   -- I/O:D8-D9h / Kanji-data (JIS1 only)
                 '1' when( pSltAdr(7 downto 2) = "111111"                                        )else   -- I/O:FC-FFh / Memory-mapper
                 '1' when( pSltAdr(7 downto 1) = "1011010"                                       )else   -- I/O:B4-B5h / RTC (RP-5C01)
@@ -2898,10 +2919,13 @@ begin
     --   SdrSta = "110" => read vdp
     --   SdrSta = "111" => write vdp
     ----------------------------------------------------------------
+    -- a BIOS from data_io (bios_prot) is read only: an ESE-RAM write (only possible with
+    -- a bank of 80h or more, the IPL loading the BIOS) is done as a read, the R800 cache
+    -- is not updated either
     w_wrt_req   <=  (RamReq and (
                         (Scc1Wrt and iSltScc1 ) or
                         (Scc2Wrt and iSltScc2 ) or
-                        (ErmWrt  and iSltErm  ) or
+                        (ErmWrt  and iSltErm and not bios_prot ) or
                         (MapWrt  and iSltMap0 ) or
                         (MapWrt  and iSltMap  )));
 
@@ -2956,32 +2980,65 @@ begin
     -- A wave slot does not touch RamDbi nor the R800 slot tracking, and RamAck waits
     -- for a real cpu slot (iack drops req: a cpu write acked in a wave slot is lost).
     wave_pend <= wave_req_t xor wave_done_t;
-    sdr_hold  <= reset or rom_dl_i or col_dl_i;
+    sdr_hold  <= reset or rom_dl_i or fifo_act;
     -- during RstSeq (after the mode set) every slot writes the same few addresses again
-    -- and again: the ZEMMIX.ROM loader can take any of them for its writes
+    -- and again: the loaders (YRW801, BIOS) can take any of them for its writes
     wave_go   <= wave_slot when( VideoDLClk = '0' or vdp_sdram_free_c or RstSeq(4 downto 3) /= "11" or sdr_hold = '1' )else '0';
     wave_sdr_adr <= s1_adr;
     colw_pend <= colw_req_t xor colw_done_t;
-    s1_pend   <= colw_pend when( col_dl_i = '1' )else wave_pend;
-    s1_we     <= '1'       when( col_dl_i = '1' )else wave_we;
-    s1_adr    <= "10" & colw_adr when( col_dl_i = '1' )else "111" & wave_adr;
-    s1_wdat   <= colw_dat  when( col_dl_i = '1' )else wave_wdat;
+    s1_pend   <= colw_pend when( fifo_act = '1' )else wave_pend;
+    s1_we     <= '1'       when( fifo_act = '1' )else wave_we;
+    s1_adr    <= colw_adr  when( fifo_act = '1' )else "111" & wave_adr;
+    s1_wdat   <= colw_dat  when( fifo_act = '1' )else wave_wdat;
 
-    -- collection bytes from the firmware (clk21m): a FIFO, one SDRAM write at a time
+    -- FIFO input: the collection to SDRAM 16 MB, the BIOS (its first 512 KB) to the ESE-RAM
+    -- (bank D 000000-07FFFF, CpuAdr 600000h), or the eject writes: 00h to the first two bytes
+    -- of segment 0 of the MegaSCC+ / MegaRAM of slot 1 (C00000h) and slot 2 (400000h) and
+    -- of the collection (1000000h), so that the BIOS finds no "AB" there (32 MB map)
+    -- JIS2 kanji: the IPL enables it (port 4Eh) after loading a BIOS of 512 KB, but it
+    -- boots a BIOS already in the ESE-RAM (from data_io) without that
+    JIS2_eff <= JIS2_ena or (bios_prot and bios_jis2_i);
+
+    fifo_dl  <= col_dl_i or bios_dl_i or eject_i;
+    fifo_act <= '1' when( fifo_dl = '1' or colw_busy = '1' or colf_rp /= colf_wp )else '0';
+    colf_we  <= '1' when( ej_cnt /= "000" )else
+                col_wr_i when( col_dl_i = '1' or (bios_dl_i = '1' and col_adr_i(22 downto 19) = "0000") )else
+                '0';
+    colf_in  <= "0110000000000000000000000" & X"00" when( ej_cnt = "110" )else
+                "0110000000000000000000001" & X"00" when( ej_cnt = "101" )else
+                "0010000000000000000000000" & X"00" when( ej_cnt = "100" )else
+                "0010000000000000000000001" & X"00" when( ej_cnt = "011" )else
+                "1000000000000000000000000" & X"00" when( ej_cnt = "010" )else
+                "1000000000000000000000001" & X"00" when( ej_cnt = "001" )else
+                "00110" & col_adr_i(19 downto 0) & col_dat_i when( bios_dl_i = '1' )else
+                "10" & col_adr_i & col_dat_i;
+
+    -- bytes from the firmware (clk21m): a FIFO, one SDRAM write at a time. The SDRAM takes
+    -- them from RstSeq = 8 on (about 0.4 ms after the power on, see RstSeq): at the power on
+    -- the firmware sends ZEMMIX.ROM some ms after the core starts, with no flow control
     process( clk21m )
     begin
         if( clk21m'event and clk21m = '1' )then
-            if( col_dl_i = '0' )then
+            ej_d <= eject_i;
+            if( eject_i = '1' and ej_d = '0' )then
+                ej_cnt <= "110";
+            elsif( ej_cnt /= "000" )then
+                ej_cnt <= ej_cnt - 1;
+            end if;
+            if( bios_dl_i = '1' )then
+                bios_prot <= '1';                                       -- until the core is loaded again
+            end if;
+            if( fifo_act = '0' )then
                 colf_wp   <= (others => '0');
                 colf_rp   <= (others => '0');
                 colw_busy <= '0';
             else
-                if( col_wr_i = '1' )then
-                    colf(conv_integer(colf_wp)) <= col_adr_i & col_dat_i;
+                if( colf_we = '1' )then
+                    colf(conv_integer(colf_wp)) <= colf_in;
                     colf_wp <= colf_wp + 1;
                 end if;
                 if( colw_busy = '0' and colf_rp /= colf_wp )then
-                    colw_adr   <= colf(conv_integer(colf_rp))(30 downto 8);
+                    colw_adr   <= colf(conv_integer(colf_rp))(32 downto 8);
                     colw_dat   <= colf(conv_integer(colf_rp))( 7 downto 0);
                     colf_rp    <= colf_rp + 1;
                     colw_req_t <= not colw_req_t;
@@ -3007,7 +3064,7 @@ begin
                 wave_done_t <= wave_ext_done_t;                             -- with its data, in the same memclk
                 wave_rdat   <= wave_ext_rdat;
             end if;
-            if( opl4_wave_ext_g and col_dl_i = '0' )then
+            if( opl4_wave_ext_g and fifo_act = '0' )then
                 wave_slot   <= '0';
             elsif( ff_sdr_seq = "111" )then
                 -- V9968 dot states (DH/DL): 01, 10, 00, 11. A slot starts when DH rises: with
@@ -3020,18 +3077,18 @@ begin
                 elsif( vdp_sdram_free_c and s1_pend = '1' and RstSeq(4 downto 3) = "11" and VideoDLClk = '0' )then
                     wave_slot <= '1';                                       -- a vdp slot (DL = 0 before it): free with the V9968
                 elsif( s1_pend = '1' and s1_we = '1' and RstSeq(4 downto 3) /= "11" and RstSeq(4 downto 3) /= "00" )then
-                    wave_slot <= '1';                                       -- ZEMMIX.ROM load during RstSeq
+                    wave_slot <= '1';                                       -- YRW801 / BIOS load during RstSeq
                 elsif( s1_pend = '1' and sdr_hold = '1' and RstSeq(4 downto 3) = "11" )then
-                    wave_slot <= '1';                                       -- MSX reset: the firmware sends ZEMMIX.ROM with the MSX in reset
+                    wave_slot <= '1';                                       -- MSX reset: the firmware sends ZEMMIX.ROM / .R01 with the MSX in reset
                 else
                     wave_slot <= '0';
                 end if;
             end if;
-            if( (not opl4_wave_ext_g or col_dl_i = '1') and ff_sdr_seq = "101" )then
+            if( (not opl4_wave_ext_g or fifo_act = '1') and ff_sdr_seq = "101" )then
                 if( wave_slot = '1' and SdrSta(2) = '1' and (SdrSta(1) = '0' or vdp_sdram_free_c) )then
                     -- the access is done when its data is on the bus (read) or written,
                     -- only in a real cpu slot or a free vdp slot (else it is tried again)
-                    if( col_dl_i = '1' )then
+                    if( fifo_act = '1' )then
                         colw_done_t <= colw_req_t;
                     else
                         if( wave_we = '0' )then
@@ -3108,8 +3165,8 @@ begin
                                 SdrUdq <= not sdr_wr_a0;                -- OPL4 wave write (also during RstSeq)
                                 SdrLdq <= sdr_wr_a0;
                             elsif( RstSeq(4 downto 3) /= "11" )then
-                                SdrUdq <= '0';
-                                SdrLdq <= '0';
+                                SdrUdq <= sdr_prot;                     -- not to a BIOS from data_io
+                                SdrLdq <= sdr_prot;
                             elsif( VideoDLClk = '0' )then
                                 SdrUdq <= not sdr_wr_a0;                -- cpu write
                                 SdrLdq <= sdr_wr_a0;
@@ -3143,6 +3200,10 @@ begin
         if( memclk'event and memclk = '1' )then
             case ff_sdr_seq is
                 when "000" =>
+                    -- sdr_prot: a RstSeq write (zeroes) to a BIOS from data_io, not done (the
+                    -- "AB" clear of the ESE-RAM in bank D, the cpu address in reset); the cpu
+                    -- writes there are already reads (w_wrt_req)
+                    sdr_prot <= '0';
                     if( SdrSta(2) = '0' )then                                       -- set [command mode]
                         --           WBL=single TM=off CL=2 WT=0(seq) BL=1
                         SdrAdr <= "00" & "010" & "0" & "010" & "0" & "000";
@@ -3154,9 +3215,13 @@ begin
                         elsif( RstSeq(4 downto 2) = "011" and warmRESET /= '1' )then
                             SdrAdr <= (others => '0');                              -- clear "AB" mark (ESE-SCC2 >> ESE-SCC1 >> ESE-RAM)
                             SdrBa  <= "1" & RstSeq(1);                              -- bank C+D
+                            sdr_prot <= bios_prot and RstSeq(1);                    -- bank D: the ESE-RAM
                         elsif( VideoDLClk = '0' )then
                             SdrAdr <= CpuAdr_r(24 downto 23) & CpuAdr_r(11 downto 1);   -- cpu read/write
                             SdrBa  <= CpuAdr_r(22 downto 21);                         -- bank A+B+C+D
+                            if( RstSeq(4 downto 3) /= "11" and CpuAdr_r(24 downto 19) = "001100" )then
+                                sdr_prot <= bios_prot;                              -- ESE-RAM 600000-67FFFFh
+                            end if;
                         else
                             SdrAdr <= "00" & VdpAdr(10 downto 0);                   -- vdp read/write
                             SdrBa  <= "11";                                         -- bank D
@@ -3519,14 +3584,12 @@ begin
                         videoY, videoC, videoV);
 
     U30_1 : msx_psg
-        generic map(psg_ym_g)
-        port map(clk21m, reset, clkena, PsgReq, open, wrt, adr, PsgDbi, dbo,
+        port map(psg_ym_i, clk21m, reset, clkena, PsgReq, open, wrt, adr, PsgDbi, dbo,
                         w_pJoyA_in, w_pJoyA_out_m, w_pStrA_m, w_pJoyB_in, pJoyB_out, pStrB, Kana, CmtIn, w_key_mode, PsgAmp);
 
     psg2_u : if use_dualpsg_g generate
         U30_2 : msx_psg
-            generic map(psg_ym_g)
-            port map(clk21m, reset, clkena, Psg2Req, open, wrt, adr, Psg2Dbi, dbo,
+            port map(psg2_ym_i, clk21m, reset, clkena, Psg2Req, open, wrt, adr, Psg2Dbi, dbo,
                             "111111", open, open, "111111", open, open, open, '0', '0', Psg2Amp);
     end generate;
 
@@ -3784,7 +3847,7 @@ begin
         v99_dbo     <= (others => '0');
     end generate;
 
-    -- diagnostics of the ZEMMIX.ROM load (regs F0h-F3h, FAh-FFh of 7Eh/7Fh):
+    -- diagnostics of the YRW801 (ZEMMIX.R01) load (regs F0h-F3h, FAh-FFh of 7Eh/7Fh):
     -- RstSeq when the download starts (bits 7-3) and a wave slot seen during it (bit 0)
     process( clk21m )
     begin
@@ -3798,7 +3861,7 @@ begin
         end if;
     end process;
 
-    -- ZEMMIX.ROM (YRW801, sent by the firmware when the core starts) to 000000h of
+    -- ZEMMIX.R01 (YRW801, sent by the firmware when the core starts, data_io index 1) to 000000h of
     -- the wave memory, through a FIFO: the SDRAM may not be ready yet (ZEMMIX-0au.5)
     u_romload : entity work.opl4_romload
         port map(

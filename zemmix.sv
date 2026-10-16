@@ -194,7 +194,7 @@ localparam SDRAM2 = "false";
 v9990_needs_DUAL_SDRAM v9990_needs_DUAL_SDRAM();   // no such module: build error
 `endif
 localparam V9990 = "true";
-`define V99_OSD "ODE,HDMI screen,Auto,V9958,V9990;",
+`define V99_OSD "P2ODE,HDMI screen,Auto,V9958,V9990;",
 `else
 localparam V9990 = "false";
 `define V99_OSD
@@ -215,25 +215,31 @@ wire        i2c_end;
 localparam CONF_STR = {
 	"ZEMMIX;;",
 	"S0U,IMGVHD,Load virtual disk;",
-	"F2,ROM,Load ROM (max 8MB);",                       // data_io index 2: to SDRAM 16 MB, the MSX in reset (0 = ZEMMIX.ROM)
+	"F0,DAT,Load BIOS;",                                // data_io index 0 as ZEMMIX.ROM: an OCM-BIOS.DAT to the ESE-RAM
+	"F2,ROM,Load ROM (max 8MB);",                       // data_io index 2: to SDRAM 16 MB, the MSX in reset (1 = ZEMMIX.R01)
 	"OIJ,Slot1 ROM type,MegaSCC+,KUC 8MB,Yamanooto 8MB,ASCII16-X 8MB;",   // the MegaSCC+ of slot 1 or a collection mapper (8 MB at SDRAM 16 MB)
 	"-;",
-	"P1,DIP Settings;",
+	// the sections only group the options: the status bits are the same as before
+	// (the saved .CFG files keep their meaning)
+	"P1,System;",
 	"P1O1,CPU Clock,Standard,Turbo;",
-	"P1OGH,Video Hz,Auto,60Hz (NTSC),50Hz (PAL);",
+	"P1O7,RAM,2048kB,4096kB;",
 	"P1O4,Slot1,External (Optional S3),MegaSCC+ 2MB;",
 	"P1O56,Slot2,External,MegaSCC+ 2MB,MegaRAM 1MB/1MB,MegaRAM 2MB/2MB;",   // Slot2Mode = {status[5], status[6]}: 10 SCC+, 01 ASCII 8, 11 ASCII 16 (megaram mapsel)
-	"P1O7,RAM,2048kB,4096kB;",
-	"P1O8,internal MegaSD,Off,on;",
-	"-;",
-	"O9,Tape sound,OFF,ON;",
-	"OC,MoonSound (OPL3/OPL4),On,Off;",
-	"-;",
-	"OF,Palette,V9968,openMSX;",
+	"P1OM,internal MegaSD,On,Off;",                     // On by default (status[8] was Off by default)
+	"P2,Video Options;",
+	"P2OGH,Video Hz,Auto,60Hz (NTSC),50Hz (PAL);",
+	"P2OF,Palette,V9968,openMSX;",
 	`V99_OSD
-	"OAB,Scanlines,Off,25%,50%,75%;",
+	"P2OAB,Scanlines,Off,25%,50%,75%;",
+	"P3,Audio Options;",
+	"P3OC,MoonSound (OPL3/OPL4),On,Off;",
+	"P3OK,PSG,YM2149,AY-3-8910;",
+	"P3OL,PSG2 (Yamanooto),YM2149,AY-3-8910;",
+	"P3O9,Tape sound,OFF,ON;",
 	"-;",
 	"T0,Reset;",
+	"TN,Eject cartridge & reset;",                      // status[23]: clears the "AB" of the ROM cartridges in the SDRAM
 	"V,v2.0.",`BUILD_DATE
 };
 
@@ -299,7 +305,7 @@ wire [63:0] wave_rdat;                     // reads: lines of 4 words (sdram2 P0
 
 // The OPL4 wave memory (port 0) and the V9990 VRAM (port 1), misc/sdram2.sv:
 // same timing as the SDRAM of emsx_top (memclk, the clock inverted).  Reset
-// only by the PLL lock: the wave memory keeps ZEMMIX.ROM over the MSX resets.
+// only by the PLL lock: the wave memory keeps the YRW801 (ZEMMIX.R01) over the MSX resets.
 `ifdef DUAL_SDRAM
 altddio_out
 #(
@@ -631,10 +637,27 @@ wire        ioctl_download;
 wire  [5:0] ioctl_index;
 wire  [1:0] ioctl_ext_index;
 
-// ZEMMIX.ROM (YRW801) download, data_io index 0: the MSX in reset, the SDRAM for the loader
-wire rom_dl = ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd0;
+// data_io index 0 (ZEMMIX.ROM at start, OSD "Load BIOS"): OCM-BIOS.DAT to the ESE-RAM (the
+// BIOS of the IPL), the MSX in reset; the BIOS is then write protected (ZEMMIX-n6s). Only the
+// menu index, not the extension index (ioctl_ext_index), as for an OSD entry with several
+// extensions
+wire bios_dl = ioctl_download && ioctl_index == 6'd0;
+// ZEMMIX.R01 (YRW801) download, data_io index 1: the MSX in reset, the SDRAM for the loader
+wire rom_dl = ioctl_download && ioctl_index == 6'd1;
 // OSD "Load ROM (max 8MB)", data_io index 2: a KUC / Yamanooto image to SDRAM 16 MB (ZEMMIX-58x)
-wire col_dl = ioctl_download && {ioctl_ext_index, ioctl_index} == 8'd2;
+wire col_dl = ioctl_download && ioctl_index == 6'd2;
+// JIS2 kanji (the IPL enables it for a BIOS of 512 KB, but it skips that with a BIOS already loaded)
+wire [31:0] ioctl_filesize;
+reg         bios_jis2 = 1'b0;
+always @(posedge clk_sys) if (bios_dl) bios_jis2 <= ioctl_filesize >= 32'd524288;
+// OSD "Eject cartridge & reset": the MSX in reset while emsx_top clears the "AB" of the ROM
+// cartridges in the SDRAM (MegaSCC+ / MegaRAM of slot 1 and 2, the collection)
+reg  [20:0] eject_cnt = 0;                      // 2^21 / 21.48 MHz = 98 ms
+always @(posedge clk_sys) begin
+	if (eject_cnt != 0) eject_cnt <= eject_cnt - 1'd1;
+	if (status[23]) eject_cnt <= 21'h1FFFFF;
+end
+wire eject = eject_cnt != 0;
 
 data_io data_io
 (
@@ -650,6 +673,7 @@ data_io data_io
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
 	.ioctl_download(ioctl_download),
+	.ioctl_filesize(ioctl_filesize),
 	.ioctl_index({ioctl_ext_index, ioctl_index})
 );
 
@@ -702,14 +726,15 @@ wire [7:0] leds;
 //  * OSD / button reset and img_mounted: 1.56 s as before (the OCM needs the long
 //    reset to start again with the SD / image; a 98 ms one did not reset nor take
 //    a newly mounted image)
-//  * the ZEMMIX.ROM download (rom_dl) and the cartridge reset (BUS_nRESET)
+//  * the data_io downloads (BIOS, YRW801, Load ROM), the OSD eject and the cartridge
+//    reset (BUS_nRESET)
 reg  [25:0] pw_cnt = 26'h3FFFFFF;               // 2^26 / 21.48 MHz = 3.1 s
 reg  [27:0] img_reset_cnt = 0;
 reg reset = 1'b1;
 `ifdef USE_EXTBUS	
-wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | !BUS_nRESET | rom_dl | col_dl;
+wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | !BUS_nRESET | bios_dl | rom_dl | col_dl | eject;
 `else
-wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | rom_dl | col_dl;
+wire resetW = ~locked | pw_cnt != 26'd0 | status[0] | buttons[1] | img_reset_cnt != 0 | bios_dl | rom_dl | col_dl | eject;
 `endif
 
 always @(posedge clk_sys) begin
@@ -718,7 +743,9 @@ always @(posedge clk_sys) begin
 	if (img_reset_cnt != 0) img_reset_cnt <= img_reset_cnt - 1'd1;
 	if (img_mounted | status[0]) img_reset_cnt <= 28'h2000000;
 	reset <= resetW;
-	dipsw <= {~status[8], ~status[7], ~status[6:5], ~status[4], 1'b1,1'b0 , ~status[1]};   // DIP 3 (VGA output CRT / LCD) not used: the VDP is always 15 kHz, mist_video doubles it
+	// DIP 8 (internal MegaSD, 0 = on) from status[22], On by default; status[8] (the old Off / on
+	// option, Off by default) is no longer used
+	dipsw <= {status[22], ~status[7], ~status[6:5], ~status[4], 1'b1,1'b0 , ~status[1]};   // DIP 3 (VGA output CRT / LCD) not used: the VDP is always 15 kHz, mist_video doubles it
 end
 
 always_comb begin
@@ -840,7 +867,6 @@ emsx_top #(
     .opl4_wave_ext_g(SDRAM2),  // OPL4 wave memory in the 2nd SDRAM instead of the top 4 MB of the SDRAM
     .use_v9990_g(V9990),       // V9990 (GFX9000), ports 60h-6Fh
     .use_dualpsg_g(true), // activar doble chip PSG
-    .psg_ym_g(1),        // PSG: 0 = AY-3-8910, 1 = YM2149
     .opl3_clk_g(OPL3_CLK)
 ) emsx (
 
@@ -933,11 +959,16 @@ emsx_top #(
 		  .rtc_i      (mist_rtc),
 
 		  .opl_on_i    (~status[12]),                                         // OSD: MoonSound on (Bloq Despl can turn it off)
+		  .psg_ym_i    (~status[20]),                                         // OSD PSG: YM2149 (0) or AY-3-8910 (1)
+		  .psg2_ym_i   (~status[21]),                                         // OSD PSG2 (Yamanooto)
 		  .rom_dl_i    (rom_dl),
 		  .col_dl_i    (col_dl),                                              // OSD Load ROM (max 8MB)
-		  .col_wr_i    (ioctl_wr & col_dl),
+		  .bios_dl_i   (bios_dl),                                             // ZEMMIX.ROM / OSD Load BIOS
+		  .bios_jis2_i (bios_jis2),
+		  .eject_i     (eject),                                               // OSD Eject cartridge & reset
+		  .col_wr_i    (ioctl_wr & (col_dl | bios_dl)),
 		  .col_adr_i   (ioctl_addr[22:0]),
-		  .col_dat_i   (ioctl_dout),                                              // ZEMMIX.ROM (YRW801) sent by the firmware
+		  .col_dat_i   (ioctl_dout),                                              // ZEMMIX.R01 (YRW801) sent by the firmware
 		  .rom_wr_i    (ioctl_wr),
 		  .rom_dat_i   (ioctl_dout),
 		  .wave_ext_req_t  (wave_req_t),

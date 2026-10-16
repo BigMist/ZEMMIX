@@ -154,7 +154,7 @@ module iplrom (
         11'h06f:    ff_dbi <= 8'hbe;
         11'h070:    ff_dbi <= 8'hf2;
         11'h071:    ff_dbi <= 8'hc3;
-        11'h072:    ff_dbi <= 8'h59;
+        11'h072:    ff_dbi <= 8'h30;  // ZEMMIX-n6s: jp set_f4_device (F230h), not boot_up_bios (F259h): a BIOS already loaded (data_io) also sets 4Ch, 4Fh, F4h
         11'h073:    ff_dbi <= 8'hf2;
         11'h074:    ff_dbi <= 8'hcd;
         11'h075:    ff_dbi <= 8'hb7;

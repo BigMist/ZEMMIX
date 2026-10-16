@@ -35,10 +35,8 @@ library ieee;
     use ieee.std_logic_unsigned.all;
 
 entity msx_psg is
-    generic(
-        YM          : integer := 0                                  -- 0 = AY-3-8910, 1 = YM2149
-    );
     port(
+        ym          : in    std_logic;                              -- 0 = AY-3-8910, 1 = YM2149 (OSD, any time)
         clk21m      : in    std_logic;
         reset       : in    std_logic;
         clkena      : in    std_logic;                              -- 3.58MHz
@@ -67,10 +65,8 @@ end msx_psg;
 architecture rtl of msx_psg is
 
     component ay_ym_psg
-        generic(
-            YM      : integer := 0
-        );
         port(
+            ym      : in    std_logic;
             clock   : in    std_logic;
             sel     : in    std_logic;
             ce      : in    std_logic;
@@ -247,10 +243,8 @@ begin
     ----------------------------------------------------------------
     -- ce = 3.58MHz with sel = 0 (further division by two): a 1.79MHz PSG, as on the MSX
     u_psgch: ay_ym_psg
-    generic map(
-        YM          => YM
-    )
     port map(
+        ym          => ym       ,
         clock       => clk21m   ,
         sel         => '0'      ,
         ce          => clkena   ,
